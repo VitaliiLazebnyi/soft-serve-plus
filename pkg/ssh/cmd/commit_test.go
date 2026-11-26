@@ -13,18 +13,18 @@ import (
 	sgit "github.com/charmbracelet/soft-serve/git"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/styles"
-	"github.com/matryer/is"
 )
 
 // diffRepo creates the repository "diffs" and returns an admin context and
 // a function that runs git in a work tree whose pushes go to it.
 func diffRepo(t *testing.T) (context.Context, func(stdin string, args ...string) string) {
 	t.Helper()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ctx = withUser(t, ctx, be, "boss", true)
 	_, err := be.CreateRepository(ctx, "diffs", proto.UserFromContext(ctx), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	bare := filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "diffs.git")
 	work := t.TempDir()
 	git := func(stdin string, args ...string) string {

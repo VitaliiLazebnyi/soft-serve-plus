@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,7 +35,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
-	"github.com/matryer/is"
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -111,54 +111,80 @@ func breakTable(t *testing.T, ctx context.Context, table string) {
 // list into what an anonymous caller sees.
 func TestRepoListUsesSessionUser(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be, _ := newLookupTestContext(t)
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	signer, err := gossh.NewSignerFromKey(priv)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	pk := signer.PublicKey()
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{PublicKeys: []gossh.PublicKey{pk}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "mine", owner, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sessCtx := context.WithValue(proto.WithUserContext(ctx, owner), ssh.ContextKeyPublicKey, pk)
 
 	// Key lookups now fail; the session's user was resolved before.
 	breakTable(t, ctx, "public_keys")
 
 	out, _, err := runRepoOutput(t, sessCtx, "list")
-	is.NoErr(err)
-	is.True(strings.Contains(out, "mine"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "mine") {
+		t.Fatal("not true: strings.Contains(out, \"mine\")")
+	}
 }
 
 // A repository lookup that fails is answered as a server fault, not as a
 // missing repository; the cause goes to the server log, not the client.
 func TestRepoCommandLookupFailure(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be, logs := newLookupTestContext(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)
 	_, err := be.CreateRepository(ownerCtx, "repo", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	strangerCtx := withUser(t, ctx, be, "stranger", false)
 
-	is.True(errors.Is(runRepo(t, strangerCtx, "info", "repo"), proto.ErrRepoNotFound))
+	if !errors.Is(runRepo(t, strangerCtx, "info", "repo"), proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(runRepo(t, strangerCtx, \"info\", \"repo\"), proto.ErrRepoNotFound)")
+	}
 
 	// Without the collaborators table, the stranger's level cannot be
 	// worked out.
 	breakTable(t, ctx, "collabs")
 	err = runRepo(t, strangerCtx, "info", "repo")
-	is.True(errors.Is(err, errLookupFailed))
-	is.True(!strings.Contains(err.Error(), "collabs"))
-	is.True(strings.Contains(logs.String(), "lookup failed"))
-	is.True(strings.Contains(logs.String(), "collabs"))
+	if !errors.Is(err, errLookupFailed) {
+		t.Fatal("not true: errors.Is(err, errLookupFailed)")
+	}
+	if strings.Contains(err.Error(), "collabs") {
+		t.Fatal("not true: !strings.Contains(err.Error(), \"collabs\")")
+	}
+	if !strings.Contains(logs.String(), "lookup failed") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"lookup failed\")")
+	}
+	if !strings.Contains(logs.String(), "collabs") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"collabs\")")
+	}
 
 	// With the repository table gone, the lookup fails for everyone, and
 	// so does the list.
 	breakTable(t, ctx, "repos")
-	is.True(errors.Is(runRepo(t, ownerCtx, "info", "repo"), errLookupFailed))
-	is.True(errors.Is(runRepo(t, ownerCtx, "list"), errLookupFailed))
+	if !errors.Is(runRepo(t, ownerCtx, "info", "repo"), errLookupFailed) {
+		t.Fatal("not true: errors.Is(runRepo(t, ownerCtx, \"info\", \"repo\"), errLookupFailed)")
+	}
+	if !errors.Is(runRepo(t, ownerCtx, "list"), errLookupFailed) {
+		t.Fatal("not true: errors.Is(runRepo(t, ownerCtx, \"list\"), errLookupFailed)")
+	}
 }
 
 // During an outage a missing name and an existing private one get the same
@@ -169,17 +195,20 @@ func TestRepoCommandOutageSameAnswer(t *testing.T) {
 	for _, table := range []string{"repos", "settings"} {
 		t.Run(table, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			ctx, be, _ := newLookupTestContext(t)
 			ownerCtx := withUser(t, ctx, be, "owner", false)
 			_, err := be.CreateRepository(ownerCtx, "repo", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{Private: true})
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			strangerCtx := withUser(t, ctx, be, "stranger", false)
 
 			breakTable(t, ctx, table)
 			for _, c := range []context.Context{ctx, strangerCtx} {
 				for _, name := range []string{"repo", "ghost"} {
-					is.True(errors.Is(runRepo(t, c, "info", name), errLookupFailed))
+					if !errors.Is(runRepo(t, c, "info", name), errLookupFailed) {
+						t.Fatal("not true: errors.Is(runRepo(t, c, \"info\", name), errLookupFailed)")
+					}
 				}
 			}
 		})
@@ -215,11 +244,12 @@ func TestGitServiceLookupFailure(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			ctx, be, logs := newLookupTestContext(t)
 			ownerCtx := withUser(t, ctx, be, "owner", false)
 			_, err := be.CreateRepository(ownerCtx, "repo", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{Private: true})
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			strangerCtx := withUser(t, ctx, be, "stranger", false)
 
 			callerCtx := strangerCtx
@@ -231,15 +261,23 @@ func TestGitServiceLookupFailure(t *testing.T) {
 				pk, ak := slashFreeKey(t)
 				cfg := cmdsOf(ctx).cfg
 				cfg.InitialAdminKeys = []string{ak}
-				is.NoErr(cfg.Validate())
+				if err := cfg.Validate(); err != nil {
+					t.Fatal(err)
+				}
 				callerCtx = context.WithValue(strangerCtx, ssh.ContextKeyPublicKey, pk)
 			}
 
 			breakTable(t, ctx, "collabs")
 			err = runGit(callerCtx, tc.cmd, tc.args...)
-			is.True(errors.Is(err, gitserve.ErrSystemMalfunction))
-			is.Equal(logs.count("ERRO"), 1)
-			is.True(strings.Contains(logs.String(), "failed to look up repository"))
+			if !errors.Is(err, gitserve.ErrSystemMalfunction) {
+				t.Fatal("not true: errors.Is(err, gitserve.ErrSystemMalfunction)")
+			}
+			if got := logs.count("ERRO"); got != 1 {
+				t.Fatalf("logs.count(\"ERRO\") = %v, want %v", got, 1)
+			}
+			if !strings.Contains(logs.String(), "failed to look up repository") {
+				t.Fatal("not true: strings.Contains(logs.String(), \"failed to look up repository\")")
+			}
 		})
 	}
 }
@@ -248,17 +286,20 @@ func TestGitServiceLookupFailure(t *testing.T) {
 // private one the same answer.
 func TestGitServiceOutageSameAnswer(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be, _ := newLookupTestContext(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)
 	_, err := be.CreateRepository(ownerCtx, "repo", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	strangerCtx := withUser(t, ctx, be, "stranger", false)
 
 	breakTable(t, ctx, "repos")
 	for _, c := range []context.Context{ctx, strangerCtx} {
 		for _, name := range []string{"repo", "ghost"} {
-			is.True(errors.Is(runGit(c, (*Commands).GitUploadPackCommand, name), gitserve.ErrSystemMalfunction))
+			if !errors.Is(runGit(c, (*Commands).GitUploadPackCommand, name), gitserve.ErrSystemMalfunction) {
+				t.Fatal("not true: errors.Is(runGit(c, (*Commands).GitUploadPackCommand, name), gitserve.ErrSystemMalfunction)")
+			}
 		}
 	}
 }
@@ -267,22 +308,35 @@ func TestGitServiceOutageSameAnswer(t *testing.T) {
 // server error, and still answered as a failed lookup.
 func TestLookupFailedCanceledLoggedAtDebug(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var buf bytes.Buffer
 	logger := log.New(&buf)
 	logger.SetLevel(log.DebugLevel)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	is.True(errors.Is(lookupFailed(ctx, logger, "look up repository", context.Canceled), errLookupFailed))
-	is.True(errors.Is(gitLookupFailed(ctx, logger, "repo", context.Canceled), gitserve.ErrSystemMalfunction))
-	is.True(strings.Contains(buf.String(), "DEBU"))
-	is.True(!strings.Contains(buf.String(), "ERRO"))
+	if !errors.Is(lookupFailed(ctx, logger, "look up repository", context.Canceled), errLookupFailed) {
+		t.Fatal("not true: errors.Is(lookupFailed(ctx, logger, \"look up repository\", context.Canceled), errLookupFailed)")
+	}
+	if !errors.Is(gitLookupFailed(ctx, logger, "repo", context.Canceled), gitserve.ErrSystemMalfunction) {
+		t.Fatal("not true: errors.Is(gitLookupFailed(ctx, logger, \"repo\", context.Canceled), gitserve.ErrSystemMalfunction)")
+	}
+	if !strings.Contains(buf.String(), "DEBU") {
+		t.Fatal("not true: strings.Contains(buf.String(), \"DEBU\")")
+	}
+	if strings.Contains(buf.String(), "ERRO") {
+		t.Fatal("not true: !strings.Contains(buf.String(), \"ERRO\")")
+	}
 
 	buf.Reset()
-	is.True(errors.Is(lookupFailed(context.Background(), logger, "look up repository", errors.New("db down")), errLookupFailed))
-	is.True(errors.Is(gitLookupFailed(context.Background(), logger, "repo", errors.New("db down")), gitserve.ErrSystemMalfunction))
-	is.Equal(strings.Count(buf.String(), "ERRO"), 2)
+	if !errors.Is(lookupFailed(context.Background(), logger, "look up repository", errors.New("db down")), errLookupFailed) {
+		t.Fatal("not true: errors.Is(lookupFailed(context.Background(), logger, \"look up repository\", errors.New(\"db down\")), errLookupFailed)")
+	}
+	if !errors.Is(gitLookupFailed(context.Background(), logger, "repo", errors.New("db down")), gitserve.ErrSystemMalfunction) {
+		t.Fatal("not true: errors.Is(gitLookupFailed(context.Background(), logger, \"repo\", errors.New(\"db down\")), gitserve.ErrSystemMalfunction)")
+	}
+	if got := strings.Count(buf.String(), "ERRO"); got != 2 {
+		t.Fatalf("strings.Count(buf.String(), \"ERRO\") = %v, want %v", got, 2)
+	}
 }
 
 // While the settings cannot be read, the admin's settings getters say the
@@ -290,7 +344,6 @@ func TestLookupFailedCanceledLoggedAtDebug(t *testing.T) {
 // stored value.
 func TestSettingsGettersLookupFailure(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be, _ := newLookupTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
 	breakTable(t, ctx, "settings")
@@ -301,8 +354,12 @@ func TestSettingsGettersLookupFailure(t *testing.T) {
 		c.SetOut(&out)
 		c.SetErr(io.Discard)
 		c.SetArgs([]string{setting})
-		is.True(errors.Is(c.ExecuteContext(adminCtx), errLookupFailed))
-		is.Equal(out.String(), "")
+		if !errors.Is(c.ExecuteContext(adminCtx), errLookupFailed) {
+			t.Fatal("not true: errors.Is(c.ExecuteContext(adminCtx), errLookupFailed)")
+		}
+		if got := out.String(); got != "" {
+			t.Fatalf("out.String() = %v, want %v", got, "")
+		}
 	}
 }
 
@@ -331,21 +388,30 @@ func slashFreeKey(t *testing.T) (gossh.PublicKey, string) {
 // every check. A file that appears later in the working directory, named
 // like a listed key, does not replace that key.
 func TestAdminKeysParsedOnce(t *testing.T) {
-	is := is.New(t)
 	pub, ak := slashFreeKey(t)
 	ctx, be := newAuthTestContextWith(t, func(c *config.Config) {
 		c.InitialAdminKeys = []string{ak}
 	})
 
 	t.Chdir(t.TempDir())
-	is.True(cmdsOf(ctx).isServerAdmin(context.WithValue(ctx, ssh.ContextKeyPublicKey, pub)))
+	if !cmdsOf(ctx).isServerAdmin(context.WithValue(ctx, ssh.ContextKeyPublicKey, pub)) {
+		t.Fatal("not true: cmdsOf(ctx).isServerAdmin(context.WithValue(ctx, ssh.ContextKeyPublicKey, pub))")
+	}
 
 	other, otherAK := slashFreeKey(t)
-	is.NoErr(os.WriteFile(ak, []byte(otherAK), 0o600))
+	if err := os.WriteFile(ak, []byte(otherAK), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-	is.True(be.IsAdminKey(pub))    // still the listed key
-	is.True(!be.IsAdminKey(other)) // the file's key is not an admin
-	is.True(!cmdsOf(ctx).isServerAdmin(context.WithValue(ctx, ssh.ContextKeyPublicKey, other)))
+	if !be.IsAdminKey(pub) {
+		t.Fatal("not true: be.IsAdminKey(pub)")
+	} // still the listed key
+	if be.IsAdminKey(other) {
+		t.Fatal("not true: !be.IsAdminKey(other)")
+	} // the file's key is not an admin
+	if cmdsOf(ctx).isServerAdmin(context.WithValue(ctx, ssh.ContextKeyPublicKey, other)) {
+		t.Fatal("not true: !cmdsOf(ctx).isServerAdmin(context.WithValue(ctx, ssh.ContextKeyPublicKey, other))")
+	}
 }
 
 // TestGlobalCommandsIgnoreRepositoryAccess checks that a non-admin cannot run
@@ -354,7 +420,6 @@ func TestAdminKeysParsedOnce(t *testing.T) {
 // caller's admin access to a repository they own called "victim".
 func TestGlobalCommandsIgnoreRepositoryAccess(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	attackerCtx := withUser(t, ctx, be, "attacker", false)
 
@@ -362,8 +427,12 @@ func TestGlobalCommandsIgnoreRepositoryAccess(t *testing.T) {
 	// AdminAccess *to that repository*.
 	attacker := proto.UserFromContext(attackerCtx)
 	_, err := be.CreateRepository(attackerCtx, "victim", attacker, proto.RepositoryOptions{})
-	is.NoErr(err)
-	is.Equal(levelOf(t, be, attackerCtx, "victim", attacker), access.AdminAccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := levelOf(t, be, attackerCtx, "victim", attacker); got != access.AdminAccess {
+		t.Fatalf("levelOf(t, be, attackerCtx, \"victim\", attacker) = %v, want %v", got, access.AdminAccess)
+	}
 
 	// Repository admin access must not authorize global user commands.
 	for _, args := range [][]string{
@@ -381,8 +450,12 @@ func TestGlobalCommandsIgnoreRepositoryAccess(t *testing.T) {
 
 	// The attacker must not have become an admin.
 	reloaded, err := be.User(ctx, "attacker")
-	is.NoErr(err)
-	is.Equal(reloaded.IsAdmin(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.IsAdmin(); got != false {
+		t.Fatalf("reloaded.IsAdmin() = %v, want %v", got, false)
+	}
 }
 
 // TestGlobalCommandsIgnoreAnonAdminAccess covers the variant that needs no
@@ -402,13 +475,16 @@ func TestGlobalCommandsIgnoreAnonAdminAccess(t *testing.T) {
 	} {
 		t.Run(fmt.Sprintf("admin_only_create=%t", tt.adminOnly), func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			ctx, be := newAuthTestContextWith(t, func(c *config.Config) { c.AdminOnlyCreate = tt.adminOnly })
-			is.NoErr(be.SetAnonAccess(ctx, access.AdminAccess))
+			if err := be.SetAnonAccess(ctx, access.AdminAccess); err != nil {
+				t.Fatal(err)
+			}
 
 			attackerCtx := withUser(t, ctx, be, "attacker", false)
 			attacker := proto.UserFromContext(attackerCtx)
-			is.Equal(levelOf(t, be, attackerCtx, "nonexistent", attacker), tt.missing)
+			if got := levelOf(t, be, attackerCtx, "nonexistent", attacker); got != tt.missing {
+				t.Fatalf("levelOf(t, be, attackerCtx, \"nonexistent\", attacker) = %v, want %v", got, tt.missing)
+			}
 
 			err := runUser(t, attackerCtx, "set-admin", "attacker", "true")
 			if !errors.Is(err, proto.ErrUnauthorized) {
@@ -416,8 +492,12 @@ func TestGlobalCommandsIgnoreAnonAdminAccess(t *testing.T) {
 			}
 
 			reloaded, err := be.User(ctx, "attacker")
-			is.NoErr(err)
-			is.Equal(reloaded.IsAdmin(), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := reloaded.IsAdmin(); got != false {
+				t.Fatalf("reloaded.IsAdmin() = %v, want %v", got, false)
+			}
 		})
 	}
 }
@@ -426,10 +506,11 @@ func TestGlobalCommandsIgnoreAnonAdminAccess(t *testing.T) {
 // parent command, so subcommands cannot be left unprotected by omission.
 func TestUserSubcommandsAreGatedByParent(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, _ := newAuthTestContext(t)
 	c := cmdsOf(ctx).UserCommand()
-	is.True(c.PersistentPreRunE != nil)
+	if c.PersistentPreRunE == nil {
+		t.Fatal("not true: c.PersistentPreRunE != nil")
+	}
 
 	for _, sub := range c.Commands() {
 		if sub.PersistentPreRunE != nil {
@@ -441,10 +522,11 @@ func TestUserSubcommandsAreGatedByParent(t *testing.T) {
 // TestSettingsSubcommandsAreGatedByParent is the settings counterpart.
 func TestSettingsSubcommandsAreGatedByParent(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, _ := newAuthTestContext(t)
 	c := cmdsOf(ctx).SettingsCommand()
-	is.True(c.PersistentPreRunE != nil)
+	if c.PersistentPreRunE == nil {
+		t.Fatal("not true: c.PersistentPreRunE != nil")
+	}
 
 	for _, sub := range c.Commands() {
 		if sub.PersistentPreRunE != nil {
@@ -459,21 +541,30 @@ func TestSettingsSubcommandsAreGatedByParent(t *testing.T) {
 // of a public repository by adding them as a no-access collaborator.
 func TestCollabManagementRequiresAdmin(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
-	is.NoErr(be.SetAnonAccess(ctx, access.NoAccess))
+	if err := be.SetAnonAccess(ctx, access.NoAccess); err != nil {
+		t.Fatal(err)
+	}
 
 	ownerCtx := withUser(t, ctx, be, "owner", false)
 	_, err := be.CreateRepository(ownerCtx, "repo", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	writerCtx := withUser(t, ctx, be, "writer", false)
 	victimCtx := withUser(t, ctx, be, "victim", false)
 	_ = withUser(t, ctx, be, "peer", false)
-	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "writer", access.ReadWriteAccess))
-	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "peer", access.ReadWriteAccess))
+	if err := be.AddCollaborator(ownerCtx, "repo", "writer", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.AddCollaborator(ownerCtx, "repo", "peer", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 	victim := proto.UserFromContext(victimCtx)
-	is.Equal(levelOf(t, be, victimCtx, "repo", victim), access.ReadOnlyAccess)
+	if got := levelOf(t, be, victimCtx, "repo", victim); got != access.ReadOnlyAccess {
+		t.Fatalf("levelOf(t, be, victimCtx, \"repo\", victim) = %v, want %v", got, access.ReadOnlyAccess)
+	}
 
 	for _, args := range [][]string{
 		{"collab", "add", "repo", "victim", "no-access"},
@@ -489,15 +580,27 @@ func TestCollabManagementRequiresAdmin(t *testing.T) {
 
 	// Nothing changed: the victim can still read and the peer keeps write.
 	_, isCollab, _ := collabOf(t, be, ctx, "repo", "victim")
-	is.Equal(isCollab, false)
-	is.Equal(levelOf(t, be, victimCtx, "repo", victim), access.ReadOnlyAccess)
+	if got := isCollab; got != false {
+		t.Fatalf("isCollab = %v, want %v", got, false)
+	}
+	if got := levelOf(t, be, victimCtx, "repo", victim); got != access.ReadOnlyAccess {
+		t.Fatalf("levelOf(t, be, victimCtx, \"repo\", victim) = %v, want %v", got, access.ReadOnlyAccess)
+	}
 	level, isCollab, err := collabOf(t, be, ctx, "repo", "peer")
-	is.NoErr(err)
-	is.True(isCollab)
-	is.Equal(level, access.ReadWriteAccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isCollab {
+		t.Fatal("not true: isCollab")
+	}
+	if got := level; got != access.ReadWriteAccess {
+		t.Fatalf("level = %v, want %v", got, access.ReadWriteAccess)
+	}
 
 	// A read-write collaborator can still list collaborators.
-	is.NoErr(runRepo(t, writerCtx, "collab", "list", "repo"))
+	if err := runRepo(t, writerCtx, "collab", "list", "repo"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestCollabManagementByRepoAdmin verifies an admin-access collaborator, who
@@ -505,44 +608,70 @@ func TestCollabManagementRequiresAdmin(t *testing.T) {
 // collaborators at any level.
 func TestCollabManagementByRepoAdmin(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 
 	ownerCtx := withUser(t, ctx, be, "owner", false)
 	_, err := be.CreateRepository(ownerCtx, "repo", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	adminCtx := withUser(t, ctx, be, "maintainer", false)
 	_ = withUser(t, ctx, be, "peer", false)
-	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "maintainer", access.AdminAccess))
+	if err := be.AddCollaborator(ownerCtx, "repo", "maintainer", access.AdminAccess); err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(runRepo(t, adminCtx, "collab", "add", "repo", "peer", "admin-access"))
+	if err := runRepo(t, adminCtx, "collab", "add", "repo", "peer", "admin-access"); err != nil {
+		t.Fatal(err)
+	}
 	level, isCollab, err := collabOf(t, be, ctx, "repo", "peer")
-	is.NoErr(err)
-	is.True(isCollab)
-	is.Equal(level, access.AdminAccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isCollab {
+		t.Fatal("not true: isCollab")
+	}
+	if got := level; got != access.AdminAccess {
+		t.Fatalf("level = %v, want %v", got, access.AdminAccess)
+	}
 
-	is.NoErr(runRepo(t, adminCtx, "collab", "remove", "repo", "peer"))
-	is.NoErr(runRepo(t, adminCtx, "collab", "add", "repo", "peer", "no-access"))
+	if err := runRepo(t, adminCtx, "collab", "remove", "repo", "peer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRepo(t, adminCtx, "collab", "add", "repo", "peer", "no-access"); err != nil {
+		t.Fatal(err)
+	}
 	level, isCollab, err = collabOf(t, be, ctx, "repo", "peer")
-	is.NoErr(err)
-	is.True(isCollab)
-	is.Equal(level, access.NoAccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isCollab {
+		t.Fatal("not true: isCollab")
+	}
+	if got := level; got != access.NoAccess {
+		t.Fatalf("level = %v, want %v", got, access.NoAccess)
+	}
 }
 
 // TestCollabManagementRefusesAnonymous verifies that anon-access set to
 // admin-access does not let an anonymous caller manage collaborators.
 func TestCollabManagementRefusesAnonymous(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 
 	ownerCtx := withUser(t, ctx, be, "owner", false)
 	_, err := be.CreateRepository(ownerCtx, "repo", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_ = withUser(t, ctx, be, "peer", false)
-	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "peer", access.ReadWriteAccess))
-	is.NoErr(be.SetAnonAccess(ctx, access.AdminAccess))
+	if err := be.AddCollaborator(ownerCtx, "repo", "peer", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.SetAnonAccess(ctx, access.AdminAccess); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, args := range [][]string{
 		{"collab", "add", "repo", "stranger"},
@@ -558,21 +687,32 @@ func TestCollabManagementRefusesAnonymous(t *testing.T) {
 // collaborator's access level next to their name.
 func TestCollabListShowsLevels(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 
 	ownerCtx := withUser(t, ctx, be, "owner", false)
 	_, err := be.CreateRepository(ownerCtx, "repo", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_ = withUser(t, ctx, be, "alice", false)
 	_ = withUser(t, ctx, be, "bob", false)
-	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "alice", access.AdminAccess))
-	is.NoErr(be.AddCollaborator(ownerCtx, "repo", "bob", access.NoAccess))
+	if err := be.AddCollaborator(ownerCtx, "repo", "alice", access.AdminAccess); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.AddCollaborator(ownerCtx, "repo", "bob", access.NoAccess); err != nil {
+		t.Fatal(err)
+	}
 
 	out, _, err := runRepoOutput(t, ownerCtx, "collab", "list", "repo")
-	is.NoErr(err)
-	is.True(strings.Contains(out, "alice\tadmin-access\n"))
-	is.True(strings.Contains(out, "bob\tno-access\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "alice\tadmin-access\n") {
+		t.Fatal("not true: strings.Contains(out, \"alice\\tadmin-access\\n\")")
+	}
+	if !strings.Contains(out, "bob\tno-access\n") {
+		t.Fatal("not true: strings.Contains(out, \"bob\\tno-access\\n\")")
+	}
 }
 
 // TestRepoPropertyLevels checks the level each property command needs to
@@ -581,19 +721,28 @@ func TestCollabListShowsLevels(t *testing.T) {
 // reader may print every property.
 func TestRepoPropertyLevels(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)
 	writerCtx := withUser(t, ctx, be, "writer", false)
 	_, err := be.CreateRepository(ownerCtx, "r", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
-	is.NoErr(err)
-	is.NoErr(be.AddCollaborator(ownerCtx, "r", "writer", access.ReadWriteAccess))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := be.AddCollaborator(ownerCtx, "r", "writer", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, prop := range []string{"description", "project-name"} {
-		is.NoErr(runRepo(t, writerCtx, prop, "r", "a", "b"))
+		if err := runRepo(t, writerCtx, prop, "r", "a", "b"); err != nil {
+			t.Fatal(err)
+		}
 		out, _, err := runRepoOutput(t, writerCtx, prop, "r")
-		is.NoErr(err)
-		is.Equal(strings.TrimSpace(out), "a b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(out); got != "a b" {
+			t.Fatalf("strings.TrimSpace(out) = %v, want %v", got, "a b")
+		}
 	}
 	for _, prop := range []string{"hidden", "mirror", "private"} {
 		for _, v := range []string{"true", "maybe"} {
@@ -602,8 +751,12 @@ func TestRepoPropertyLevels(t *testing.T) {
 			}
 		}
 		out, _, err := runRepoOutput(t, writerCtx, prop, "r")
-		is.NoErr(err)
-		is.Equal(strings.TrimSpace(out), "false")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(out); got != "false" {
+			t.Fatalf("strings.TrimSpace(out) = %v, want %v", got, "false")
+		}
 	}
 }
 
@@ -650,26 +803,33 @@ func wantInvalidBool(t *testing.T, err error) {
 // turns the property on and a typo is refused.
 func TestRepoBoolArgs(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
 	_, err := be.CreateRepository(adminCtx, "r", proto.UserFromContext(adminCtx), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	get := map[string]func() bool{
 		"hidden": func() bool {
 			r, err := be.Repository(ctx, "r")
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			return r.IsHidden()
 		},
 		"private": func() bool {
 			r, err := be.Repository(ctx, "r")
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			return r.IsPrivate()
 		},
 	}
 	for _, prop := range []string{"hidden", "private"} {
-		is.NoErr(runRepo(t, adminCtx, prop, "r", "TRUE"))
+		if err := runRepo(t, adminCtx, prop, "r", "TRUE"); err != nil {
+			t.Fatal(err)
+		}
 		if !get[prop]() {
 			t.Errorf("repo %s r TRUE: property not set", prop)
 		}
@@ -677,7 +837,9 @@ func TestRepoBoolArgs(t *testing.T) {
 		if !get[prop]() {
 			t.Errorf("repo %s r yes: property changed despite the error", prop)
 		}
-		is.NoErr(runRepo(t, adminCtx, prop, "r", "False"))
+		if err := runRepo(t, adminCtx, prop, "r", "False"); err != nil {
+			t.Fatal(err)
+		}
 		if get[prop]() {
 			t.Errorf("repo %s r False: property not cleared", prop)
 		}
@@ -690,7 +852,9 @@ func TestRepoBoolArgs(t *testing.T) {
 		t.Errorf("repo mirror r TRUE: expected the no-remote error, got %v", err)
 	}
 	wantInvalidBool(t, runRepo(t, adminCtx, "mirror", "r", "yes"))
-	is.NoErr(runRepo(t, adminCtx, "mirror", "r", "FALSE"))
+	if err := runRepo(t, adminCtx, "mirror", "r", "FALSE"); err != nil {
+		t.Fatal(err)
+	}
 
 	// hidden refuses extra arguments rather than ignore them.
 	if err := runRepo(t, adminCtx, "hidden", "r", "true", "extra"); err == nil {
@@ -705,40 +869,58 @@ func TestRepoBoolArgs(t *testing.T) {
 // alice instead of demoting her, and that a typo is rejected.
 func TestUserSetAdminBoolArg(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
 	_, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	isAdmin := func() bool {
 		u, err := be.User(ctx, "alice")
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return u.IsAdmin()
 	}
 
-	is.NoErr(runUser(t, adminCtx, "set-admin", "alice", "True"))
-	is.True(isAdmin())
+	if err := runUser(t, adminCtx, "set-admin", "alice", "True"); err != nil {
+		t.Fatal(err)
+	}
+	if !isAdmin() {
+		t.Fatal("not true: isAdmin()")
+	}
 	wantInvalidBool(t, runUser(t, adminCtx, "set-admin", "alice", "no"))
-	is.True(isAdmin())
-	is.NoErr(runUser(t, adminCtx, "set-admin", "alice", "false"))
-	is.True(!isAdmin())
+	if !isAdmin() {
+		t.Fatal("not true: isAdmin()")
+	}
+	if err := runUser(t, adminCtx, "set-admin", "alice", "false"); err != nil {
+		t.Fatal(err)
+	}
+	if isAdmin() {
+		t.Fatal("not true: !isAdmin()")
+	}
 }
 
 // TestSettingsAllowKeylessBoolArg checks that an unparsable value is rejected
 // instead of disabling keyless access server-wide.
 func TestSettingsAllowKeylessBoolArg(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, _ := newSettingsTestContext(t)
 
 	_, _, err := runSettings(t, ctx, "allow-keyless", "true")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, _, err = runSettings(t, ctx, "allow-keyless", "yes")
 	wantInvalidBool(t, err)
 	out, _, err := runSettings(t, ctx, "allow-keyless")
-	is.NoErr(err)
-	is.Equal(strings.TrimSpace(out), "true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(out); got != "true" {
+		t.Fatalf("strings.TrimSpace(out) = %v, want %v", got, "true")
+	}
 }
 
 // newMemServer starts an httptest server for h on testNet and closes it when
@@ -781,13 +963,14 @@ func TestEventSenderIsCurrentAccountPerCommand(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			ctx, be := newAuthTestContextWith(t, func(cfg *config.Config) {
 				cfg.Webhook.AllowedHosts = []string{"127.0.0.0/8"}
 			})
 			ownerCtx := whRepo(t, ctx, be) // the session resolved "owner"
 			r, err := be.Repository(ctx, "hooks")
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			gitRefs(t, filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "hooks.git"))
 
 			got := make(chan senderEvent, 8)
@@ -803,15 +986,25 @@ func TestEventSenderIsCurrentAccountPerCommand(t *testing.T) {
 				got <- senderEvent{req.Header.Get("X-SoftServe-Event"), payload.Sender.ID, payload.Sender.Username}
 				w.WriteHeader(http.StatusOK)
 			}))
-			is.NoErr(be.CreateWebhook(ownerCtx, r, backend.WebhookInput{URL: srv.URL + "/hook", ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventBranchTagDelete, webhook.EventRepository}, Active: true}))
+			if err := be.CreateWebhook(ownerCtx, r, backend.WebhookInput{URL: srv.URL + "/hook", ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventBranchTagDelete, webhook.EventRepository}, Active: true}); err != nil {
+				t.Fatal(err)
+			}
 
-			is.NoErr(be.SetUsername(ctx, "owner", "renamed"))
-			is.NoErr(runRepo(t, ownerCtx, tc.args...))
+			if err := be.SetUsername(ctx, "owner", "renamed"); err != nil {
+				t.Fatal(err)
+			}
+			if err := runRepo(t, ownerCtx, tc.args...); err != nil {
+				t.Fatal(err)
+			}
 
 			select {
 			case ev := <-got:
-				is.Equal(ev.event, tc.event.String())
-				is.Equal(ev.id, proto.UserFromContext(ownerCtx).ID())
+				if got, want := ev.event, tc.event.String(); got != want {
+					t.Fatalf("ev.event = %v, want %v", got, want)
+				}
+				if got, want := ev.id, proto.UserFromContext(ownerCtx).ID(); got != want {
+					t.Fatalf("ev.id = %v, want %v", got, want)
+				}
 				if ev.username != "renamed" {
 					t.Errorf("%s event: sender %q, want %q", tc.name, ev.username, "renamed")
 				}
@@ -1257,7 +1450,6 @@ func assertSameAnswer(t *testing.T, ctx context.Context, want error) {
 	for _, args := range repoScopedCommands {
 		name := strings.Join(args, " ")
 		t.Run(name, func(t *testing.T) {
-			is := is.New(t)
 			privOut, privErrOut, privErr := runRepoOutput(t, ctx, withRepoName(args, "secret")...)
 			missOut, missErrOut, missErr := runRepoOutput(t, ctx, withRepoName(args, "ghost")...)
 			if !errors.Is(privErr, want) {
@@ -1266,20 +1458,27 @@ func assertSameAnswer(t *testing.T, ctx context.Context, want error) {
 			if !errors.Is(missErr, want) {
 				t.Errorf("missing: expected %v, got %v", want, missErr)
 			}
-			is.Equal(privOut, "")
-			is.Equal(missOut, privOut)
-			is.Equal(missErrOut, privErrOut)
+			if got := privOut; got != "" {
+				t.Fatalf("privOut = %v, want %v", got, "")
+			}
+			if got := missOut; got != privOut {
+				t.Fatalf("missOut = %v, want %v", got, privOut)
+			}
+			if got := missErrOut; got != privErrOut {
+				t.Fatalf("missErrOut = %v, want %v", got, privErrOut)
+			}
 		})
 	}
 }
 
 func setupSecretRepo(t *testing.T) (context.Context, context.Context, *backend.Backend) {
 	t.Helper()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)
 	_, err := be.CreateRepository(ownerCtx, "secret", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_ = withUser(t, ctx, be, "someone", false)
 	return ctx, ownerCtx, be
 }
@@ -1303,10 +1502,11 @@ func TestRegisteredUserCannotTellPrivateFromMissing(t *testing.T) {
 // TestNoAccessCollaboratorCannotTellPrivateFromMissing covers a user who was
 // explicitly granted no-access on the private repository.
 func TestNoAccessCollaboratorCannotTellPrivateFromMissing(t *testing.T) {
-	is := is.New(t)
 	ctx, ownerCtx, be := setupSecretRepo(t)
 	userCtx := withUser(t, ctx, be, "blocked", false)
-	is.NoErr(be.AddCollaborator(ownerCtx, "secret", "blocked", 0))
+	if err := be.AddCollaborator(ownerCtx, "secret", "blocked", 0); err != nil {
+		t.Fatal(err)
+	}
 	assertSameAnswer(t, userCtx, proto.ErrRepoNotFound)
 }
 
@@ -1350,63 +1550,95 @@ func TestReaderGetsUnauthorizedForWrites(t *testing.T) {
 // database row can still be deleted.
 func TestAdminCanDeleteOrphanedRepository(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "root", true)
 	_, err := be.CreateRepository(adminCtx, "orphan", proto.UserFromContext(adminCtx), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cfg := cmdsOf(ctx).cfg
-	is.NoErr(os.RemoveAll(filepath.Join(cfg.DataPath, "repos", "orphan.git")))
+	if err := os.RemoveAll(filepath.Join(cfg.DataPath, "repos", "orphan.git")); err != nil {
+		t.Fatal(err)
+	}
 
 	// Reads still say not found, even to the admin.
 	err = runRepo(t, adminCtx, "info", "orphan")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 
-	is.NoErr(runRepo(t, adminCtx, "delete", "orphan"))
+	if err := runRepo(t, adminCtx, "delete", "orphan"); err != nil {
+		t.Fatal(err)
+	}
 	repos, err := be.Repositories(ctx)
-	is.NoErr(err)
-	is.Equal(len(repos), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(repos); got != 0 {
+		t.Fatalf("len(repos) = %v, want %v", got, 0)
+	}
 
 	// A second delete reports the name as missing.
 	err = runRepo(t, adminCtx, "delete", "orphan")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 }
 
 // TestRenameDestinationIsGatedLikeCreate verifies a writer cannot rename
 // onto a name they could not create, and gets the same answer create gives.
 func TestRenameDestinationIsGatedLikeCreate(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)
 	otherCtx := withUser(t, ctx, be, "other", false)
 	_, err := be.CreateRepository(ownerCtx, "mine", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(otherCtx, "theirs", proto.UserFromContext(otherCtx), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	renameErr := runRepo(t, ownerCtx, "rename", "mine", "theirs")
 	createErr := runRepo(t, ownerCtx, "create", "theirs")
-	is.True(errors.Is(renameErr, proto.ErrUnauthorized))
-	is.Equal(renameErr, createErr)
+	if !errors.Is(renameErr, proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(renameErr, proto.ErrUnauthorized)")
+	}
+	if got, want := renameErr, createErr; !reflect.DeepEqual(got, want) {
+		t.Fatalf("renameErr = %v, want %v", got, want)
+	}
 
 	// The gate for the source does not leak into the destination check.
-	is.NoErr(runRepo(t, ownerCtx, "rename", "mine", "renamed"))
+	if err := runRepo(t, ownerCtx, "rename", "mine", "renamed"); err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.Repository(ctx, "renamed")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// With admin-only creation on, a new name is one the owner could not
 	// create, so renaming onto it gets create's answer too.
 	cmdsOf(ctx).cfg.AdminOnlyCreate = true
 	renameErr = runRepo(t, ownerCtx, "rename", "renamed", "again")
 	createErr = runRepo(t, ownerCtx, "create", "again")
-	is.True(errors.Is(renameErr, proto.ErrUnauthorized))
-	is.Equal(renameErr, createErr)
+	if !errors.Is(renameErr, proto.ErrUnauthorized) {
+		t.Fatal("not true: errors.Is(renameErr, proto.ErrUnauthorized)")
+	}
+	if got, want := renameErr, createErr; !reflect.DeepEqual(got, want) {
+		t.Fatalf("renameErr = %v, want %v", got, want)
+	}
 	_, err = be.Repository(ctx, "again")
-	is.True(err != nil)
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
 	_, err = be.Repository(ctx, "renamed")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // afterGate runs fn once, after the next access check of ctx's commands and
@@ -1460,23 +1692,34 @@ func TestRepoCommandsActOnCheckedRepository(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			ctx, be := newAuthTestContext(t)
 			aliceCtx := withUser(t, ctx, be, "alice", false)
 			bobCtx := withUser(t, ctx, be, "bob", false)
 			for _, u := range []string{"carol", "dave"} {
 				_, err := be.CreateUser(ctx, u, proto.UserOptions{})
-				is.NoErr(err)
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			_, err := be.CreateRepository(aliceCtx, "r", proto.UserFromContext(aliceCtx), proto.RepositoryOptions{})
-			is.NoErr(err)
-			is.NoErr(be.AddCollaborator(aliceCtx, "r", "dave", access.ReadOnlyAccess))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := be.AddCollaborator(aliceCtx, "r", "dave", access.ReadOnlyAccess); err != nil {
+				t.Fatal(err)
+			}
 
 			afterGate(ctx, func() {
-				is.NoErr(be.RenameRepository(aliceCtx, "r", "r-old"))
+				if err := be.RenameRepository(aliceCtx, "r", "r-old"); err != nil {
+					t.Fatal(err)
+				}
 				_, err := be.CreateRepository(bobCtx, "r", proto.UserFromContext(bobCtx), proto.RepositoryOptions{})
-				is.NoErr(err)
-				is.NoErr(be.AddCollaborator(bobCtx, "r", "dave", access.ReadOnlyAccess))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := be.AddCollaborator(bobCtx, "r", "dave", access.ReadOnlyAccess); err != nil {
+					t.Fatal(err)
+				}
 			})
 			err = runRepo(t, aliceCtx, tc.args...)
 			if !errors.Is(err, proto.ErrRepoNotFound) {
@@ -1484,8 +1727,12 @@ func TestRepoCommandsActOnCheckedRepository(t *testing.T) {
 			}
 
 			other, err := be.Repository(ctx, "r")
-			is.NoErr(err) // bob's repository is still there
-			is.Equal(other.UserID(), proto.UserFromContext(bobCtx).ID())
+			if err != nil {
+				t.Fatal(err)
+			} // bob's repository is still there
+			if got, want := other.UserID(), proto.UserFromContext(bobCtx).ID(); got != want {
+				t.Fatalf("other.UserID() = %v, want %v", got, want)
+			}
 			if !tc.same(t, ctx, be, other) {
 				t.Errorf("%v changed bob's repository", tc.args)
 			}
@@ -1512,29 +1759,44 @@ func isCollab(t *testing.T, ctx context.Context, be *backend.Backend, r proto.Re
 // account as it is now, not the name it had when the session started.
 func TestEventSenderIsCurrentAccount(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be) // the session resolved "owner"
 	id := whCreate(t, ownerCtx, be, "-e", "collaborator")
 	whPointAtLoopback(t, ownerCtx, "hooks", id)
 	_, err := be.CreateUser(ctx, "carol", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	is.NoErr(be.SetUsername(ctx, "owner", "renamed"))
-	is.NoErr(runRepo(t, ownerCtx, "collab", "add", "hooks", "carol"))
+	if err := be.SetUsername(ctx, "owner", "renamed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRepo(t, ownerCtx, "collab", "add", "hooks", "carol"); err != nil {
+		t.Fatal(err)
+	}
 	whAwaitDeliveries(t, ownerCtx, be, "hooks", id, 1)
-	is.NoErr(runRepo(t, ownerCtx, "collab", "remove", "hooks", "carol"))
+	if err := runRepo(t, ownerCtx, "collab", "remove", "hooks", "carol"); err != nil {
+		t.Fatal(err)
+	}
 	whAwaitDeliveries(t, ownerCtx, be, "hooks", id, 2)
 
 	be.WaitForDeliveries(context.Background())
 	r, err := be.Repository(ctx, "hooks")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ds, err := be.ListWebhookDeliveries(ctx, r, id)
-	is.NoErr(err)
-	is.Equal(len(ds), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(ds); got != 2 {
+		t.Fatalf("len(ds) = %v, want %v", got, 2)
+	}
 	for _, d := range ds {
 		full, err := be.WebhookDelivery(ctx, r, id, d.ID)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var payload struct {
 			Action string `json:"action"`
 			Sender struct {
@@ -1542,8 +1804,12 @@ func TestEventSenderIsCurrentAccount(t *testing.T) {
 				Username string `json:"username"`
 			} `json:"sender"`
 		}
-		is.NoErr(json.Unmarshal([]byte(full.RequestBody), &payload))
-		is.Equal(payload.Sender.ID, proto.UserFromContext(ownerCtx).ID())
+		if err := json.Unmarshal([]byte(full.RequestBody), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := payload.Sender.ID, proto.UserFromContext(ownerCtx).ID(); got != want {
+			t.Fatalf("payload.Sender.ID = %v, want %v", got, want)
+		}
 		if payload.Sender.Username != "renamed" {
 			t.Errorf("collaborator %s event: sender %q, want %q", payload.Action, payload.Sender.Username, "renamed")
 		}
@@ -1558,12 +1824,15 @@ func TestEventSenderIsCurrentAccount(t *testing.T) {
 // must not rename the other account.
 func TestAccountCommandsActOnSessionAccountAfterRename(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	newKey := func() gossh.PublicKey {
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		signer, err := gossh.NewSignerFromKey(priv)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return signer.PublicKey()
 	}
 	run := func(ctx context.Context, c *cobra.Command, args ...string) error {
@@ -1577,42 +1846,72 @@ func TestAccountCommandsActOnSessionAccountAfterRename(t *testing.T) {
 	keysOf := func(ctx context.Context, name string) []gossh.PublicKey {
 		t.Helper()
 		u, err := be.User(ctx, name)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return u.PublicKeys()
 	}
 	k1, k2signer := newKey(), newEd25519Signer(t)
 	k2 := k2signer.PublicKey()
 	session, err := be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []gossh.PublicKey{k1}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sessCtx := context.WithValue(proto.WithUserContext(ctx, session), ssh.ContextKeyPublicKey, k1)
 
 	// An admin renames the account; another account takes the old name.
-	is.NoErr(be.SetUsername(ctx, "alice", "carol"))
+	if err := be.SetUsername(ctx, "alice", "carol"); err != nil {
+		t.Fatal(err)
+	}
 	// The other account has two keys, so removing one of them is not
 	// refused as its last key: only the account decides.
 	mk, mk2 := newKey(), newKey()
 	_, err = be.CreateUser(ctx, "alice", proto.UserOptions{PublicKeys: []gossh.PublicKey{mk, mk2}})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The proof signs the account's name as it is now.
 	_, err = runPubkeyIn(sessCtx, proofFor(t, k2signer, "carol"), "add", proto.MarshalAuthorizedKey(k2))
-	is.NoErr(err)
-	is.Equal(len(keysOf(ctx, "carol")), 2)
-	is.Equal(len(keysOf(ctx, "alice")), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(keysOf(ctx, "carol")); got != 2 {
+		t.Fatalf("len(keysOf(ctx, \"carol\")) = %v, want %v", got, 2)
+	}
+	if got := len(keysOf(ctx, "alice")); got != 2 {
+		t.Fatalf("len(keysOf(ctx, \"alice\")) = %v, want %v", got, 2)
+	}
 
 	// The other account's key is not the session's to remove.
 	err = run(sessCtx, cmdsOf(sessCtx).PubkeyCommand(), "remove", proto.MarshalAuthorizedKey(mk))
-	is.True(errors.Is(err, proto.ErrPublicKeyNotFound))
-	is.Equal(len(keysOf(ctx, "alice")), 2)
-	is.NoErr(run(sessCtx, cmdsOf(sessCtx).PubkeyCommand(), "remove", proto.MarshalAuthorizedKey(k2)))
-	is.Equal(len(keysOf(ctx, "carol")), 1)
+	if !errors.Is(err, proto.ErrPublicKeyNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrPublicKeyNotFound)")
+	}
+	if got := len(keysOf(ctx, "alice")); got != 2 {
+		t.Fatalf("len(keysOf(ctx, \"alice\")) = %v, want %v", got, 2)
+	}
+	if err := run(sessCtx, cmdsOf(sessCtx).PubkeyCommand(), "remove", proto.MarshalAuthorizedKey(k2)); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(keysOf(ctx, "carol")); got != 1 {
+		t.Fatalf("len(keysOf(ctx, \"carol\")) = %v, want %v", got, 1)
+	}
 
-	is.NoErr(run(sessCtx, cmdsOf(sessCtx).SetUsernameCommand(), "dave"))
+	if err := run(sessCtx, cmdsOf(sessCtx).SetUsernameCommand(), "dave"); err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.User(ctx, "dave")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.User(ctx, "carol")
-	is.True(errors.Is(err, proto.ErrUserNotFound))
-	is.Equal(len(keysOf(ctx, "alice")), 2) // the other account kept its name and keys
+	if !errors.Is(err, proto.ErrUserNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrUserNotFound)")
+	}
+	if got := len(keysOf(ctx, "alice")); got != 2 {
+		t.Fatalf("len(keysOf(ctx, \"alice\")) = %v, want %v", got, 2)
+	} // the other account kept its name and keys
 }
 
 // The SSH authentication middleware resolves the session's key to a user

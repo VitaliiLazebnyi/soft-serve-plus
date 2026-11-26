@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -17,7 +18,6 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // A go get request walks up its path to the closest repository, one
@@ -33,14 +33,15 @@ import (
 // parallel with others.
 func TestGoGetLongPath(t *testing.T) { //nolint:tparallel // the subtests share one fixture and run in order
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.DebugLevel)
 
 	f := newOracleFixtureLogging(t, logger)
 	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct {
 		name     string
@@ -56,16 +57,23 @@ func TestGoGetLongPath(t *testing.T) { //nolint:tparallel // the subtests share 
 		{"over cap", "/pub/" + strings.Repeat("a/", 10000), http.StatusNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			is := is.New(t)
 			logs.Reset()
 			w := f.do(http.MethodGet, tc.path+"?go-get=1", "")
-			is.Equal(w.Code, tc.wantCode)
-			if tc.wantCode == http.StatusOK {
-				is.True(strings.Contains(w.Body.String(), "/pub git ")) // resolves to the repository
+			if got := w.Code; got != tc.wantCode {
+				t.Fatalf("w.Code = %v, want %v", got, tc.wantCode)
 			}
-			is.True(!strings.Contains(logs.String(), "ERRO")) // no error logged
+			if tc.wantCode == http.StatusOK {
+				if !strings.Contains(w.Body.String(), "/pub git ") {
+					t.Fatal("not true: strings.Contains(w.Body.String(), \"/pub git \")")
+				} // resolves to the repository
+			}
+			if strings.Contains(logs.String(), "ERRO") {
+				t.Fatal("not true: !strings.Contains(logs.String(), \"ERRO\")")
+			} // no error logged
 			if tc.name == "over cap" {
-				is.True(!strings.Contains(logs.String(), "repository name")) // no lookup was made
+				if strings.Contains(logs.String(), "repository name") {
+					t.Fatal("not true: !strings.Contains(logs.String(), \"repository name\")")
+				} // no lookup was made
 			}
 		})
 	}
@@ -91,10 +99,11 @@ func allocated(f func()) uint64 {
 // a lookup of every parent at the length cap would cost hundreds of
 // megabytes per request.
 func TestGoGetPathWorkIsBounded(t *testing.T) {
-	is := is.New(t)
 	f := newOracleFixture(t)
 	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	bearer := "Bearer " + f.mintJWT(t, f.owner, "secret")
 
 	// Under the cap: a package path of about 2,000 segments in the
@@ -132,21 +141,28 @@ func TestGoGetPathWorkIsBounded(t *testing.T) {
 	// A bearer token for a repository still lets its owner go get a deep
 	// package path inside it.
 	w := f.do(http.MethodGet, "/secret/"+strings.Repeat("pkg/", 500)+"?go-get=1", bearer)
-	is.Equal(w.Code, http.StatusOK)
-	is.True(strings.Contains(w.Body.String(), "/secret.git"))
+	if got := w.Code; got != http.StatusOK {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+	}
+	if !strings.Contains(w.Body.String(), "/secret.git") {
+		t.Fatal("not true: strings.Contains(w.Body.String(), \"/secret.git\")")
+	}
 }
 
 // The server reads at most maxHeaderBytes of request line and headers, not
 // the net/http default of 1 MB.
 func TestHTTPServerHeaderLimit(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	e := f.env
 	s, err := NewHTTPServer(e.cfg, e.be, e.dbx, e.datastore, e.tokens(t), e.logger)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	go func() { _ = s.Serve(l) }()
 	t.Cleanup(func() { _ = s.Close() })
 
@@ -170,34 +186,53 @@ func TestHTTPServerHeaderLimit(t *testing.T) {
 				break
 			}
 		}
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		defer conn.Close() //nolint:errcheck
-		is.NoErr(conn.SetDeadline(time.Now().Add(closeWait)))
+		if err := conn.SetDeadline(time.Now().Add(closeWait)); err != nil {
+			t.Fatal(err)
+		}
 		go func() {
 			_, _ = io.WriteString(conn, "GET "+path+" HTTP/1.1\r\nHost: localhost\r\n\r\n")
 		}()
 		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		_ = resp.Body.Close()
 		return resp.StatusCode
 	}
-	is.Equal(get("/"+strings.Repeat("a", 32<<10)), http.StatusNotFound)
+	if got := get("/" + strings.Repeat("a", 32<<10)); got != http.StatusNotFound {
+		t.Fatalf("get(\"/\"+strings.Repeat(\"a\", 32<<10)) = %v, want %v", got, http.StatusNotFound)
+	}
 	// net/http allows 4 KiB over MaxHeaderBytes.
-	is.Equal(get("/"+strings.Repeat("a", maxHeaderBytes+8<<10)), http.StatusRequestHeaderFieldsTooLarge)
+	if got := get("/" + strings.Repeat("a", maxHeaderBytes+8<<10)); got != http.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("get(\"/\"+strings.Repeat(\"a\", maxHeaderBytes+8<<10)) = %v, want %v", got, http.StatusRequestHeaderFieldsTooLarge)
+	}
 }
 
 // pathAncestors lists the parents nearest the root, and no more than
 // maxPathAncestors of them.
 func TestPathAncestorsBounded(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	p := strings.TrimSuffix(strings.Repeat("a/", 1000), "/")
 	got := pathAncestors(p)
-	is.Equal(len(got), 1+maxPathAncestors)
-	is.Equal(got[0], p)
-	is.Equal(got[len(got)-1], "a")
-	is.Equal(got[len(got)-2], "a/a")
-	is.Equal(pathAncestors("a/.git/b"), []string{"a/.git/b", "a"})
+	if got, want := len(got), 1+maxPathAncestors; got != want {
+		t.Fatalf("len(got) = %v, want %v", got, want)
+	}
+	if got := got[0]; got != p {
+		t.Fatalf("got[0] = %v, want %v", got, p)
+	}
+	if got := got[len(got)-1]; got != "a" {
+		t.Fatalf("got[len(got)-1] = %v, want %v", got, "a")
+	}
+	if got := got[len(got)-2]; got != "a/a" {
+		t.Fatalf("got[len(got)-2] = %v, want %v", got, "a/a")
+	}
+	if got, want := pathAncestors("a/.git/b"), ([]string{"a/.git/b", "a"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("pathAncestors(\"a/.git/b\") = %v, want %v", got, want)
+	}
 }
 
 // goGet requests the go-get page for path.
@@ -213,48 +248,76 @@ func goGet(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder
 // escapes what it interpolates.
 func TestGoGetImportRoot(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := f.env.cfg
 
 	cfg.HTTP.PublicURL = "https://example.com/git"
 	w := goGet(t, f.handler, "/pub/sub")
-	is.Equal(w.Code, http.StatusOK)
-	is.Equal(w.Header().Get("Content-Type"), "text/html; charset=utf-8")
+	if got := w.Code; got != http.StatusOK {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+	}
+	if got := w.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("w.Header().Get(\"Content-Type\") = %v, want %v", got, "text/html; charset=utf-8")
+	}
 	body := w.Body.String()
-	is.True(strings.Contains(body, `<meta name="go-import" content="example.com/git/pub git https://example.com/git/pub.git">`))
-	is.True(strings.Contains(body, `href="https://pkg.go.dev/example.com/git/pub"`))
-	is.True(strings.Contains(body, `content="0; url=https://pkg.go.dev/example.com/git/pub"`))
+	if !strings.Contains(body, `<meta name="go-import" content="example.com/git/pub git https://example.com/git/pub.git">`) {
+		t.Fatal("not true: strings.Contains(body, `<meta name=\"go-import\" content=\"example.com/git/pub git https://example.com/git/pub.git\">`)")
+	}
+	if !strings.Contains(body, `href="https://pkg.go.dev/example.com/git/pub"`) {
+		t.Fatal("not true: strings.Contains(body, `href=\"https://pkg.go.dev/example.com/git/pub\"`)")
+	}
+	if !strings.Contains(body, `content="0; url=https://pkg.go.dev/example.com/git/pub"`) {
+		t.Fatal("not true: strings.Contains(body, `content=\"0; url=https://pkg.go.dev/example.com/git/pub\"`)")
+	}
 
 	cfg.HTTP.PublicURL = "https://example.com"
 	body = goGet(t, f.handler, "/pub").Body.String()
-	is.True(strings.Contains(body, `<meta name="go-import" content="example.com/pub git https://example.com/pub.git">`))
+	if !strings.Contains(body, `<meta name="go-import" content="example.com/pub git https://example.com/pub.git">`) {
+		t.Fatal("not true: strings.Contains(body, `<meta name=\"go-import\" content=\"example.com/pub git https://example.com/pub.git\">`)")
+	}
 
 	// A public URL is configuration, but it is still not markup.
 	cfg.HTTP.PublicURL = `https://example.com/a"><script>x</script>`
 	w = goGet(t, f.handler, "/pub")
 	body = w.Body.String()
 	// The page still renders, with the value escaped rather than dropped.
-	is.Equal(w.Code, http.StatusOK)
-	is.True(strings.Contains(body, `<meta name="go-import" content="example.com/a&#34;&gt;&lt;script&gt;x&lt;/script&gt;/pub git https://example.com/a&#34;&gt;&lt;script&gt;x&lt;/script&gt;/pub.git">`))
-	is.True(strings.Contains(body, `href="https://pkg.go.dev/example.com/a%22%3E%3Cscript%3Ex%3C/script%3E/pub"`))
-	is.True(!strings.Contains(body, "<script>"))
-	is.True(!strings.Contains(body, `a">`))
-	is.True(!strings.Contains(body, "ZgotmplZ"))
+	if got := w.Code; got != http.StatusOK {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+	}
+	if !strings.Contains(body, `<meta name="go-import" content="example.com/a&#34;&gt;&lt;script&gt;x&lt;/script&gt;/pub git https://example.com/a&#34;&gt;&lt;script&gt;x&lt;/script&gt;/pub.git">`) {
+		t.Fatal("not true: strings.Contains(body, `<meta name=\"go-import\" content=\"example.com/a&#34;&gt;&lt;script&gt;x&lt;/script&gt;/pub git https://example.com/a&#34;&gt;&lt;script&gt;x&lt;/script&gt;/pub.git\">`)")
+	}
+	if !strings.Contains(body, `href="https://pkg.go.dev/example.com/a%22%3E%3Cscript%3Ex%3C/script%3E/pub"`) {
+		t.Fatal("not true: strings.Contains(body, `href=\"https://pkg.go.dev/example.com/a%22%3E%3Cscript%3Ex%3C/script%3E/pub\"`)")
+	}
+	if strings.Contains(body, "<script>") {
+		t.Fatal("not true: !strings.Contains(body, \"<script>\")")
+	}
+	if strings.Contains(body, `a">`) {
+		t.Fatal("not true: !strings.Contains(body, `a\">`)")
+	}
+	if strings.Contains(body, "ZgotmplZ") {
+		t.Fatal("not true: !strings.Contains(body, \"ZgotmplZ\")")
+	}
 }
 
 func TestGoImportRoot(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	for raw, want := range map[string]string{
 		"https://example.com":           "example.com",
 		"https://example.com/":          "example.com",
 		"https://example.com:8443/a/b/": "example.com:8443/a/b",
 	} {
 		u, err := url.Parse(raw)
-		is.NoErr(err)
-		is.Equal(goImportRoot(u), want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := goImportRoot(u); got != want {
+			t.Fatalf("goImportRoot(u) = %v, want %v", got, want)
+		}
 	}
 }

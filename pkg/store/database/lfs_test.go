@@ -13,7 +13,6 @@ import (
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
-	"github.com/matryer/is"
 )
 
 // listLFSLocks pages through every lock of repo 7, limit at a time, by the
@@ -47,7 +46,6 @@ func listLFSLocks(t *testing.T, ctx context.Context, dbx *db.DB, limit int, betw
 // pages ordered by it alone would bring ties back in no fixed order, and
 // Postgres would list some locks twice and others never.
 func TestLFSLocksPagingSameSecond(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 
@@ -58,10 +56,14 @@ func TestLFSLocksPagingSameSecond(t *testing.T) {
 		}
 	}
 	_, err := dbx.ExecContext(ctx, `UPDATE lfs_locks SET updated_at = '2026-01-01 00:00:00';`)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	seen := listLFSLocks(t, ctx, dbx, 7, nil)
-	is.Equal(len(seen), n)
+	if got := len(seen); got != n {
+		t.Fatalf("len(seen) = %v, want %v", got, n)
+	}
 	for path, count := range seen {
 		if count != 1 {
 			t.Errorf("%s listed %d times, want 1", path, count)
@@ -75,7 +77,6 @@ func TestLFSLocksPagingSameSecond(t *testing.T) {
 // later lock onto the page already returned, and a new lock shifted one onto
 // the next page twice.
 func TestLFSLocksPagingConcurrentChanges(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 
@@ -86,12 +87,16 @@ func TestLFSLocksPagingConcurrentChanges(t *testing.T) {
 		}
 	}
 	first, err := s.GetLFSLockForPath(ctx, dbx, 7, "f0")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	seen := listLFSLocks(t, ctx, dbx, 5, func(page int) {
 		switch page {
 		case 1:
-			is.NoErr(s.DeleteLFSLock(ctx, dbx, 7, first.ID))
+			if err := s.DeleteLFSLock(ctx, dbx, 7, first.ID); err != nil {
+				t.Fatal(err)
+			}
 		case 2:
 			if _, err := s.CreateLFSLockForUser(ctx, dbx, 7, 100, "new", "refs/heads/main"); err != nil {
 				t.Fatal(err)
@@ -112,7 +117,6 @@ func TestLFSLocksPagingConcurrentChanges(t *testing.T) {
 // A non-positive limit returns no locks on every driver. SQLite would
 // otherwise treat a negative LIMIT as no limit at all.
 func TestGetLFSLocksNonPositiveLimit(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 
@@ -125,16 +129,28 @@ func TestGetLFSLocksNonPositiveLimit(t *testing.T) {
 
 	for _, limit := range []int{0, -1} {
 		locks, err := s.GetLFSLocks(ctx, dbx, 7, 0, limit)
-		is.NoErr(err)
-		is.Equal(len(locks), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(locks); got != 0 {
+			t.Fatalf("len(locks) = %v, want %v", got, 0)
+		}
 	}
 
 	locks, err := s.GetLFSLocks(ctx, dbx, 7, 0, 1)
-	is.NoErr(err)
-	is.Equal(len(locks), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(locks); got != 1 {
+		t.Fatalf("len(locks) = %v, want %v", got, 1)
+	}
 	locks, err = s.GetLFSLocks(ctx, dbx, 7, 0, 10)
-	is.NoErr(err)
-	is.Equal(len(locks), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(locks); got != 2 {
+		t.Fatalf("len(locks) = %v, want %v", got, 2)
+	}
 }
 
 func TestLFSObjectStore(t *testing.T) {

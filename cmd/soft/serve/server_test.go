@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -47,7 +48,6 @@ import (
 	sshsrv "github.com/charmbracelet/soft-serve/pkg/ssh"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
-	"github.com/matryer/is"
 	gossh "golang.org/x/crypto/ssh"
 	_ "modernc.org/sqlite" // sqlite driver
 )
@@ -81,7 +81,6 @@ func TestWarnIfAnonAdminAccess(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			is := is.New(t)
 			ctx, cfg, be := setupTestBackend(t)
 
 			allow := c.allowKeyless
@@ -94,7 +93,9 @@ func TestWarnIfAnonAdminAccess(t *testing.T) {
 			warnIfAnonAdminAccess(ctx, be, logger)
 
 			gotWarning := strings.Contains(buf.String(), "WARNING")
-			is.Equal(gotWarning, c.wantWarning)
+			if got := gotWarning; got != c.wantWarning {
+				t.Fatalf("gotWarning = %v, want %v", got, c.wantWarning)
+			}
 		})
 	}
 }
@@ -103,42 +104,55 @@ func TestWarnIfAnonAdminAccess(t *testing.T) {
 // enabled server: a config.yaml from before the non-zero default keeps
 // max_timeout: 0. A disabled server is not.
 func TestWarnUnboundedTimeouts(t *testing.T) {
-	is := is.New(t)
 	warnings := func(cfg *config.Config) string {
 		var buf bytes.Buffer
 		warnUnboundedTimeouts(cfg, log.New(&buf))
 		return buf.String()
 	}
 
-	is.Equal(warnings(config.DefaultConfig()), "")
+	if got := warnings(config.DefaultConfig()); got != "" {
+		t.Fatalf("warnings(config.DefaultConfig()) = %v, want %v", got, "")
+	}
 
 	cfg := config.DefaultConfig()
 	cfg.SSH.MaxTimeout, cfg.Git.MaxTimeout, cfg.HTTP.MaxTimeout = 0, 0, 0
 	cfg.Git.Enabled = false
 	got := warnings(cfg)
-	is.True(strings.Contains(got, "WARN"))
-	is.True(strings.Contains(got, "ssh.max_timeout"))
-	is.True(strings.Contains(got, "http.max_timeout"))
-	is.True(!strings.Contains(got, "git.max_timeout"))
-	is.True(strings.Contains(got, "recommended=21600"))
+	if !strings.Contains(got, "WARN") {
+		t.Fatal("not true: strings.Contains(got, \"WARN\")")
+	}
+	if !strings.Contains(got, "ssh.max_timeout") {
+		t.Fatal("not true: strings.Contains(got, \"ssh.max_timeout\")")
+	}
+	if !strings.Contains(got, "http.max_timeout") {
+		t.Fatal("not true: strings.Contains(got, \"http.max_timeout\")")
+	}
+	if strings.Contains(got, "git.max_timeout") {
+		t.Fatal("not true: !strings.Contains(got, \"git.max_timeout\")")
+	}
+	if !strings.Contains(got, "recommended=21600") {
+		t.Fatal("not true: strings.Contains(got, \"recommended=21600\")")
+	}
 }
 
 func TestEnsureDefaultRepoDisabled(t *testing.T) {
-	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)
 
 	cfg.DefaultRepo = ""
 	ensureDefaultRepo(ctx, cfg, be, log.New(os.Stderr))
 
 	repos, err := be.Repositories(ctx)
-	is.NoErr(err)
-	is.Equal(len(repos), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(repos); got != 0 {
+		t.Fatalf("len(repos) = %v, want %v", got, 0)
+	}
 }
 
 // With admin-only creation on, the boot-time default repository is still
 // created: it is attributed to the lowest-ID admin, who may create.
 func TestEnsureDefaultRepoCreatesWhenAdminOnly(t *testing.T) {
-	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)
 
 	cfg.AdminOnlyCreate = true
@@ -146,8 +160,12 @@ func TestEnsureDefaultRepoCreatesWhenAdminOnly(t *testing.T) {
 	ensureDefaultRepo(ctx, cfg, be, log.New(os.Stderr))
 
 	r, err := be.Repository(ctx, "gitops")
-	is.NoErr(err)
-	is.Equal(r.Name(), "gitops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Name(); got != "gitops" {
+		t.Fatalf("r.Name() = %v, want %v", got, "gitops")
+	}
 }
 
 // User 1 is not necessarily an admin (it can be demoted, and a database
@@ -155,60 +173,82 @@ func TestEnsureDefaultRepoCreatesWhenAdminOnly(t *testing.T) {
 // default repository goes to the lowest-ID admin rather than to user 1, who
 // would otherwise get admin access to it as its owner.
 func TestEnsureDefaultRepoOwnedByAdminWhenUserOneDemoted(t *testing.T) {
-	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)
 
 	user1, err := be.UserByID(ctx, 1)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Two more admins, so user 1 can be demoted and the lowest ID wins.
 	admin, err := be.CreateUser(ctx, "root2", proto.UserOptions{Admin: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateUser(ctx, "root3", proto.UserOptions{Admin: true})
-	is.NoErr(err)
-	is.NoErr(be.SetAdmin(ctx, user1.Username(), false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := be.SetAdmin(ctx, user1.Username(), false); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg.AdminOnlyCreate = true
 	cfg.DefaultRepo = "gitops"
 	ensureDefaultRepo(ctx, cfg, be, log.New(os.Stderr))
 
 	r, err := be.Repository(ctx, "gitops")
-	is.NoErr(err)
-	is.Equal(r.UserID(), admin.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := r.UserID(), admin.ID(); got != want {
+		t.Fatalf("r.UserID() = %v, want %v", got, want)
+	}
 }
 
 // When user 1 has been deleted, the default repository is still created and
 // attributed to the remaining admin.
 func TestEnsureDefaultRepoCreatedWhenUserOneDeleted(t *testing.T) {
-	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)
 
 	admin, err := be.CreateUser(ctx, "root2", proto.UserOptions{Admin: true})
-	is.NoErr(err)
-	is.NoErr(be.DeleteUser(ctx, "admin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := be.DeleteUser(ctx, "admin"); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg.DefaultRepo = "gitops"
 	ensureDefaultRepo(ctx, cfg, be, log.New(os.Stderr))
 
 	r, err := be.Repository(ctx, "gitops")
-	is.NoErr(err)
-	is.Equal(r.UserID(), admin.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := r.UserID(), admin.ID(); got != want {
+		t.Fatalf("r.UserID() = %v, want %v", got, want)
+	}
 }
 
 func TestEnsureDefaultRepoCreatesWhenMissing(t *testing.T) {
-	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)
 
 	cfg.DefaultRepo = "gitops"
 	ensureDefaultRepo(ctx, cfg, be, log.New(os.Stderr))
 
 	r, err := be.Repository(ctx, "gitops")
-	is.NoErr(err)
-	is.Equal(r.Name(), "gitops")
-	is.Equal(r.IsPrivate(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Name(); got != "gitops" {
+		t.Fatalf("r.Name() = %v, want %v", got, "gitops")
+	}
+	if got := r.IsPrivate(); got != false {
+		t.Fatalf("r.IsPrivate() = %v, want %v", got, false)
+	}
 }
 
 func TestEnsureDefaultRepoIsIdempotent(t *testing.T) {
-	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)
 
 	cfg.DefaultRepo = "gitops"
@@ -216,7 +256,9 @@ func TestEnsureDefaultRepoIsIdempotent(t *testing.T) {
 
 	ensureDefaultRepo(ctx, cfg, be, logger)
 	r, err := be.Repository(ctx, "gitops")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	createdAt := r.CreatedAt()
 
 	// Restart-safety: a second boot against the same data must not error or
@@ -224,76 +266,104 @@ func TestEnsureDefaultRepoIsIdempotent(t *testing.T) {
 	ensureDefaultRepo(ctx, cfg, be, logger)
 
 	r, err = be.Repository(ctx, "gitops")
-	is.NoErr(err)
-	is.Equal(r.CreatedAt(), createdAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := r.CreatedAt(), createdAt; !reflect.DeepEqual(got, want) {
+		t.Fatalf("r.CreatedAt() = %v, want %v", got, want)
+	}
 
 	repos, err := be.Repositories(ctx)
-	is.NoErr(err)
-	is.Equal(len(repos), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(repos); got != 1 {
+		t.Fatalf("len(repos) = %v, want %v", got, 1)
+	}
 }
 
 func TestEnsureDefaultRepoInvalidNameSkipped(t *testing.T) {
-	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)
 
 	cfg.DefaultRepo = "../not valid!"
 	ensureDefaultRepo(ctx, cfg, be, log.New(os.Stderr))
 
 	repos, err := be.Repositories(ctx)
-	is.NoErr(err)
-	is.Equal(len(repos), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(repos); got != 0 {
+		t.Fatalf("len(repos) = %v, want %v", got, 0)
+	}
 }
 
 func TestEnsureDefaultRepoLooksUpExisting(t *testing.T) {
-	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)
 
 	owner, err := be.UserByID(ctx, 1)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "gitops", owner, proto.RepositoryOptions{
 		Private: true,
 	})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cfg.DefaultRepo = "gitops"
 	ensureDefaultRepo(ctx, cfg, be, log.New(os.Stderr))
 
 	r, err := be.Repository(ctx, "gitops")
-	is.NoErr(err)
-	is.Equal(r.IsPrivate(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.IsPrivate(); got != true {
+		t.Fatalf("r.IsPrivate() = %v, want %v", got, true)
+	}
 }
 
 func TestEnsureDefaultRepoOwnerLookupFailsSkipped(t *testing.T) {
-	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)
 
 	// Delete the only admin account so there is no owner to attribute the
 	// repository to. ensureDefaultRepo must log and return, not panic.
-	is.NoErr(be.DeleteUser(ctx, "admin"))
+	if err := be.DeleteUser(ctx, "admin"); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg.DefaultRepo = "gitops"
 	ensureDefaultRepo(ctx, cfg, be, log.New(os.Stderr))
 
 	repos, err := be.Repositories(ctx)
-	is.NoErr(err)
-	is.Equal(len(repos), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(repos); got != 0 {
+		t.Fatalf("len(repos) = %v, want %v", got, 0)
+	}
 }
 
 func TestEnsureDefaultRepoLookupErrorSkipped(t *testing.T) {
-	is := is.New(t)
 	ctx, cfg, be, dbx := setupTestBackendWithDB(t)
 
 	// Create the repo directory on disk so Repository() passes os.Stat,
 	// then close the DB so the lookup behind it fails with a non-not-found error.
 	repoDir := filepath.Join(cfg.DataPath, "repos", "gitops.git")
-	is.NoErr(os.MkdirAll(repoDir, os.ModePerm))
-	is.NoErr(dbx.Close())
+	if err := os.MkdirAll(repoDir, os.ModePerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := dbx.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg.DefaultRepo = "gitops"
 	ensureDefaultRepo(ctx, cfg, be, log.New(os.Stderr))
 
 	_, err := be.UserByID(ctx, 1)
-	is.True(err != nil) // db is closed, sanity check we broke it correctly
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	} // db is closed, sanity check we broke it correctly
 }
 
 func TestEnsureDefaultRepoCreateErrorSkipped(t *testing.T) {
@@ -301,28 +371,34 @@ func TestEnsureDefaultRepoCreateErrorSkipped(t *testing.T) {
 		t.Skip("requires enforceable directory permissions as a non-root user")
 	}
 
-	is := is.New(t)
 	ctx, cfg, be := setupTestBackend(t)
 
 	// Make the "repos" directory read-only so CreateRepository's git.Init
 	// fails for a reason other than the repo already existing.
 	reposDir := filepath.Join(cfg.DataPath, "repos")
-	is.NoErr(os.MkdirAll(reposDir, os.ModePerm))
-	is.NoErr(os.Chmod(reposDir, 0o555))
+	if err := os.MkdirAll(reposDir, os.ModePerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(reposDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { os.Chmod(reposDir, 0o755) }) //nolint: errcheck
 
 	cfg.DefaultRepo = "gitops"
 	ensureDefaultRepo(ctx, cfg, be, log.New(os.Stderr))
 
 	repos, err := be.Repositories(ctx)
-	is.NoErr(err)
-	is.Equal(len(repos), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(repos); got != 0 {
+		t.Fatalf("len(repos) = %v, want %v", got, 0)
+	}
 }
 
 // During shutdown, a second interrupt or terminate signal ends the wait for
 // webhook deliveries. SIGHUP comes on another channel (see notifySignals).
 func TestAbortOnSignal(t *testing.T) {
-	is := is.New(t)
 	var logs bytes.Buffer
 	sigs := make(chan os.Signal)
 	abort, stop := abortOnSignal(sigs, log.New(&logs))
@@ -341,7 +417,9 @@ func TestAbortOnSignal(t *testing.T) {
 	case <-time.After(time.Minute):
 		t.Fatal("SIGTERM did not abort the wait")
 	}
-	is.True(strings.Contains(logs.String(), "not waiting for webhook deliveries"))
+	if !strings.Contains(logs.String(), "not waiting for webhook deliveries") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"not waiting for webhook deliveries\")")
+	}
 }
 
 // ensureKey creates a missing key, keeps an existing one, and reports a
@@ -377,7 +455,6 @@ func TestEnsureKey(t *testing.T) {
 // loopback addresses. It is closed when the test ends.
 func newStartTestServer(t *testing.T, sshAddr, gitAddr, httpAddr, statsAddr string) *Server {
 	t.Helper()
-	is := is.New(t)
 	ctx, cfg, be, dbx := setupTestBackendWithDB(t)
 
 	cfg.SSH.ListenAddr = sshAddr
@@ -386,7 +463,9 @@ func newStartTestServer(t *testing.T, sshAddr, gitAddr, httpAddr, statsAddr stri
 	cfg.Stats.ListenAddr = statsAddr
 
 	s, err := NewServer(ctx, cfg, dbx, database.New(nil), be, log.New(io.Discard))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
 }

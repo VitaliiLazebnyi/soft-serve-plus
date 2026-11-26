@@ -4,44 +4,68 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/matryer/is"
 )
 
 func TestNewCollaboratorEvent(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newTestEnv(t)
-	is.NoErr(e.ds.CreateUser(e.ctx, e.dbx, "bob", false, nil))
-	is.NoErr(e.ds.AddCollabByUsernameAndRepo(e.ctx, e.dbx, "bob", "repo", access.ReadWriteAccess))
+	if err := e.ds.CreateUser(e.ctx, e.dbx, "bob", false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ds.AddCollabByUsernameAndRepo(e.ctx, e.dbx, "bob", "repo", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 
 	ev, err := e.s.NewCollaboratorEvent(e.ctx, e.sender(), e.senderRepo(""), "bob", CollaboratorEventAdded)
-	is.NoErr(err)
-	is.Equal(ev.EventType, EventCollaborator)
-	is.Equal(ev.Action, CollaboratorEventAdded)
-	is.Equal(ev.Collaborator.Username, "bob")
-	is.True(ev.Collaborator.ID != 0)
-	is.Equal(ev.AccessLevel, access.ReadWriteAccess)
-	is.Equal(ev.Repository.Owner.Username, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ev.EventType; got != EventCollaborator {
+		t.Fatalf("ev.EventType = %v, want %v", got, EventCollaborator)
+	}
+	if got := ev.Action; got != CollaboratorEventAdded {
+		t.Fatalf("ev.Action = %v, want %v", got, CollaboratorEventAdded)
+	}
+	if got := ev.Collaborator.Username; got != "bob" {
+		t.Fatalf("ev.Collaborator.Username = %v, want %v", got, "bob")
+	}
+	if ev.Collaborator.ID == 0 {
+		t.Fatal("not true: ev.Collaborator.ID != 0")
+	}
+	if got := ev.AccessLevel; got != access.ReadWriteAccess {
+		t.Fatalf("ev.AccessLevel = %v, want %v", got, access.ReadWriteAccess)
+	}
+	if got := ev.Repository.Owner.Username; got != "alice" {
+		t.Fatalf("ev.Repository.Owner.Username = %v, want %v", got, "alice")
+	}
 	// Collaborator events carry the same clone URLs as every other event.
-	is.Equal(ev.Repository.HTTPURL, "http://127.0.0.1:23232/repo.git")
-	is.Equal(ev.Repository.SSHURL, "ssh://127.0.0.1:23231/repo.git")
-	is.Equal(ev.Repository.GitURL, "git://127.0.0.1:9418/repo.git")
+	if got := ev.Repository.HTTPURL; got != "http://127.0.0.1:23232/repo.git" {
+		t.Fatalf("ev.Repository.HTTPURL = %v, want %v", got, "http://127.0.0.1:23232/repo.git")
+	}
+	if got := ev.Repository.SSHURL; got != "ssh://127.0.0.1:23231/repo.git" {
+		t.Fatalf("ev.Repository.SSHURL = %v, want %v", got, "ssh://127.0.0.1:23231/repo.git")
+	}
+	if got := ev.Repository.GitURL; got != "git://127.0.0.1:9418/repo.git" {
+		t.Fatalf("ev.Repository.GitURL = %v, want %v", got, "git://127.0.0.1:9418/repo.git")
+	}
 }
 
 func TestNewCollaboratorEventUnknownCollaborator(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newTestEnv(t)
 
 	_, err := e.s.NewCollaboratorEvent(e.ctx, e.sender(), e.senderRepo(""), "nobody", CollaboratorEventRemoved)
-	is.True(err != nil)
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
 }
 
 func TestNewCollaboratorEventOwnerLookupFails(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	e := newTestEnv(t)
 
 	_, err := e.s.NewCollaboratorEvent(e.ctx, e.sender(), e.ownerLess(), "alice", CollaboratorEventAdded)
-	is.True(err != nil)
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
 }

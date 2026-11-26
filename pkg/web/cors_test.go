@@ -4,11 +4,11 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/matryer/is"
 )
 
 // An empty public URL with no allowed origins allows no origin, not every
@@ -237,7 +237,6 @@ func TestCORSBehaviour(t *testing.T) {
 // answer to another.
 func TestCORSVaryOrigin(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	cfg := f.env.cfg
 	cfg.HTTP.CORS.AllowedOrigins = []string{"https://git.example.com"}
@@ -254,7 +253,9 @@ func TestCORSVaryOrigin(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, req)
-			is.Equal(w.Header().Values("Vary"), []string{"Origin"})
+			if got, want := w.Header().Values("Vary"), ([]string{"Origin"}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("w.Header().Values(\"Vary\") = %v, want %v", got, want)
+			}
 		}
 	}
 }
@@ -263,7 +264,6 @@ func TestCORSVaryOrigin(t *testing.T) {
 // carries a path, so the configured URL is reduced to scheme and host.
 func TestCORSPublicURLWithPath(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	cfg := f.env.cfg
 	cfg.HTTP.PublicURL = "https://Git.Example.com:443/soft/"
@@ -278,14 +278,15 @@ func TestCORSPublicURLWithPath(t *testing.T) {
 		req.Header.Set("Origin", origin)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
-		is.Equal(w.Header().Get("Access-Control-Allow-Origin"), want)
+		if got := w.Header().Get("Access-Control-Allow-Origin"); got != want {
+			t.Fatalf("w.Header().Get(\"Access-Control-Allow-Origin\") = %v, want %v", got, want)
+		}
 	}
 }
 
 func TestCORSOrigins(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
-	is.Equal(corsOrigins([]string{
+	if got, want := corsOrigins([]string{
 		"https://git.example.com/soft",
 		"https://git.example.com",
 		"HTTP://Example.COM:80/",
@@ -295,7 +296,7 @@ func TestCORSOrigins(t *testing.T) {
 		"*",
 		"",
 		"not a url",
-	}), []string{
+	}), ([]string{
 		"https://git.example.com",
 		"http://example.com",
 		"http://example.com:8080",
@@ -304,5 +305,7 @@ func TestCORSOrigins(t *testing.T) {
 		"*",
 		"",
 		"not a url",
-	})
+	}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("corsOrigins of the mixed origin list = %v, want %v", got, want)
+	}
 }

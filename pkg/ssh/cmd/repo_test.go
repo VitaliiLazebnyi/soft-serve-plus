@@ -16,7 +16,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/google/uuid"
-	"github.com/matryer/is"
 )
 
 // binaryContents is a file git and the blob command treat as binary.
@@ -27,11 +26,12 @@ var binaryContents = []byte("bin\x00ary")
 // commit's hash.
 func viewRepo(t *testing.T) (context.Context, string) {
 	t.Helper()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ctx = withUser(t, ctx, be, "boss", true)
 	_, err := be.CreateRepository(ctx, "view", proto.UserFromContext(ctx), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	bare := filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "view.git")
 	work := t.TempDir()
@@ -47,8 +47,12 @@ func viewRepo(t *testing.T) (context.Context, string) {
 		return strings.TrimSpace(string(out))
 	}
 	git("init", "-q", "-b", "main")
-	is.NoErr(os.WriteFile(filepath.Join(work, "README.md"), []byte("hello\n"), 0o600))
-	is.NoErr(os.WriteFile(filepath.Join(work, "data.bin"), binaryContents, 0o600))
+	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "data.bin"), binaryContents, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	git("add", "-A")
 	git("commit", "-q", "-m", "first")
 	git("push", "-q", bare, "main")
@@ -60,33 +64,40 @@ func viewRepo(t *testing.T) (context.Context, string) {
 
 func TestBlobRawPrintsExactBytes(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, _ := viewRepo(t)
 
 	stdout, _, err := runRepoOutput(t, ctx, "blob", "view", "data.bin", "--raw")
-	is.NoErr(err)
-	is.True(bytes.Equal([]byte(stdout), binaryContents)) // no newline added
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal([]byte(stdout), binaryContents) {
+		t.Fatal("not true: bytes.Equal([]byte(stdout), binaryContents)")
+	} // no newline added
 }
 
 func TestBlobMissingPathIsFileNotFound(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, _ := viewRepo(t)
 
 	for _, path := range []string{"nope.txt", "dir/nope.txt"} {
 		_, _, err := runRepoOutput(t, ctx, "blob", "view", path)
-		is.True(errors.Is(err, proto.ErrFileNotFound))
+		if !errors.Is(err, proto.ErrFileNotFound) {
+			t.Fatal("not true: errors.Is(err, proto.ErrFileNotFound)")
+		}
 	}
 }
 
 func TestCommitPrintsHash(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, sha := viewRepo(t)
 
 	stdout, _, err := runRepoOutput(t, ctx, "commit", "view", "HEAD")
-	is.NoErr(err)
-	is.True(strings.HasPrefix(stdout, "commit "+sha+"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(stdout, "commit "+sha+"\n") {
+		t.Fatal("not true: strings.HasPrefix(stdout, \"commit \"+sha+\"\\n\")")
+	}
 }
 
 // The repo commands run git under the session's context: git started after
@@ -134,12 +145,15 @@ func assertNoControls(t *testing.T, out string) {
 // write must still not reach the terminal raw.
 func TestRepoDescriptionAndProjectNameSanitised(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	st, dbx := cmdsOf(ctx).store, cmdsOf(ctx).db
-	is.NoErr(st.SetRepoDescriptionByName(ctx, dbx, "hooks", "desc"+escapes))
-	is.NoErr(st.SetRepoProjectNameByName(ctx, dbx, "hooks", "name"+escapes))
+	if err := st.SetRepoDescriptionByName(ctx, dbx, "hooks", "desc"+escapes); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetRepoProjectNameByName(ctx, dbx, "hooks", "name"+escapes); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, args := range [][]string{
 		{"info", "hooks"},
@@ -147,7 +161,9 @@ func TestRepoDescriptionAndProjectNameSanitised(t *testing.T) {
 		{"project-name", "hooks"},
 	} {
 		stdout, stderr, err := runRepoOutput(t, ownerCtx, args...)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		out := stdout + stderr
 		assertNoControls(t, out)
 		if !strings.Contains(out, "desc") && !strings.Contains(out, "name") {
@@ -160,12 +176,11 @@ func TestRepoDescriptionAndProjectNameSanitised(t *testing.T) {
 // delivery, so it must not carry escape sequences to their terminal.
 func TestWebhookDeliveriesGetSanitisesOutput(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	id := whCreate(t, ownerCtx, be)
 	delID := uuid.MustParse("00000000-0000-0000-0000-0000000000d2")
-	is.NoErr(cmdsOf(ctx).store.CreateWebhookDelivery(ctx, cmdsOf(ctx).db, models.WebhookDelivery{
+	if err := cmdsOf(ctx).store.CreateWebhookDelivery(ctx, cmdsOf(ctx).db, models.WebhookDelivery{
 		ID:              delID,
 		WebhookID:       id,
 		Event:           int(webhook.EventPush),
@@ -176,13 +191,19 @@ func TestWebhookDeliveriesGetSanitisesOutput(t *testing.T) {
 		ResponseStatus:  200,
 		ResponseHeaders: "X-Reply: b" + escapes + "\r\n",
 		ResponseBody:    "reply" + escapes,
-	}))
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	stdout, stderr, err := runRepoOutput(t, ownerCtx, "webhook", "deliveries", "get", "hooks", strconv.FormatInt(id, 10), delID.String())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assertNoControls(t, stdout+stderr)
 	for _, want := range []string{"  X-Req: a", `  {"msg":""}`, "  X-Reply: b", "  reply"} {
-		is.True(hasLine(stdout, want))
+		if !hasLine(stdout, want) {
+			t.Fatal("not true: hasLine(stdout, want)")
+		}
 	}
 }
 
@@ -225,14 +246,15 @@ func pushHostileRepo(t *testing.T, ctx context.Context) {
 	git("", "tag", "-a", "v1", "-m", "tag"+hostile)
 	git("", "tag", "tag\u009b2Jname")
 	git("", "push", "-q", bare, "main", "main:branch\u009b2Jname", "v1", "tag\u009b2Jname")
-	is.New(t).NoErr(exec.Command("git", "--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main").Run()) //nolint:noctx
+	if err := exec.Command("git", "--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main").Run(); err != nil { //nolint:noctx
+		t.Fatal(err)
+	}
 }
 
 // Every command that shows git data for reading in a terminal strips what
 // the repository carries, while the text around it stays.
 func TestRepoGitDataSanitised(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := whRepo(t, ctx, be)
 	pushHostileRepo(t, ownerCtx)
@@ -253,7 +275,9 @@ func TestRepoGitDataSanitised(t *testing.T) {
 		{[]string{"blob", "--linenumber", "hooks", "main.go"}, []string{"go-comment"}},
 	} {
 		stdout, stderr, err := runRepoOutput(t, ownerCtx, tc.args...)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		out := csiSeq.ReplaceAllString(stdout+stderr, "")
 		assertNoControls(t, out)
 		for _, w := range tc.want {
@@ -266,11 +290,19 @@ func TestRepoGitDataSanitised(t *testing.T) {
 	// A plain patch and a plain blob are meant to be piped (git apply, a
 	// file) and stay byte for byte.
 	stdout, _, err := runRepoOutput(t, ownerCtx, "commit", "--patch", "hooks", "main")
-	is.NoErr(err)
-	is.True(strings.Contains(stdout, "go-comment"+hostile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "go-comment"+hostile) {
+		t.Fatal("not true: strings.Contains(stdout, \"go-comment\"+hostile)")
+	}
 	stdout, _, err = runRepoOutput(t, ownerCtx, "blob", "hooks", "main.go")
-	is.NoErr(err)
-	is.True(strings.Contains(stdout, "go-comment"+hostile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "go-comment"+hostile) {
+		t.Fatal("not true: strings.Contains(stdout, \"go-comment\"+hostile)")
+	}
 }
 
 // csiSeq matches the SGR styles the commands themselves emit with --color.

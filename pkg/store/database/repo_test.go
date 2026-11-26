@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
-	"github.com/matryer/is"
 )
 
 // A failed sync records its error and keeps the time of the last one that
@@ -225,30 +224,57 @@ func TestCreateRepoColumns(t *testing.T) {
 // collaborator level, ok only when the caller has a row, and not found for
 // a missing name.
 func TestGetRepoWithCollabByName(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
-	is.NoErr(s.CreateUser(ctx, dbx, "alice", false, nil))
+	if err := s.CreateUser(ctx, dbx, "alice", false, nil); err != nil {
+		t.Fatal(err)
+	}
 	alice, err := s.FindUserByUsername(ctx, dbx, "alice")
-	is.NoErr(err)
-	is.NoErr(s.AddCollabByUsernameAndRepo(ctx, dbx, "alice", "repo7", access.ReadWriteAccess))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddCollabByUsernameAndRepo(ctx, dbx, "alice", "repo7", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 
 	m, level, ok, err := s.GetRepoWithCollabByName(ctx, dbx, "repo7", alice.ID)
-	is.NoErr(err)
-	is.Equal(m.ID, int64(7))
-	is.Equal(m.Name, "repo7")
-	is.True(ok)
-	is.Equal(level, access.ReadWriteAccess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := m.ID, int64(7); got != want {
+		t.Fatalf("m.ID = %v, want %v", got, want)
+	}
+	if got := m.Name; got != "repo7" {
+		t.Fatalf("m.Name = %v, want %v", got, "repo7")
+	}
+	if !ok {
+		t.Fatal("not true: ok")
+	}
+	if got := level; got != access.ReadWriteAccess {
+		t.Fatalf("level = %v, want %v", got, access.ReadWriteAccess)
+	}
 
 	m, _, ok, err = s.GetRepoWithCollabByName(ctx, dbx, "repo8", alice.ID)
-	is.NoErr(err)
-	is.Equal(m.ID, int64(8))
-	is.True(!ok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := m.ID, int64(8); got != want {
+		t.Fatalf("m.ID = %v, want %v", got, want)
+	}
+	if ok {
+		t.Fatal("not true: !ok")
+	}
 
 	_, _, ok, err = s.GetRepoWithCollabByName(ctx, dbx, "repo7", 0)
-	is.NoErr(err)
-	is.True(!ok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("not true: !ok")
+	}
 
 	_, _, _, err = s.GetRepoWithCollabByName(ctx, dbx, "missing", alice.ID)
-	is.True(errors.Is(err, db.ErrRecordNotFound))
+	if !errors.Is(err, db.ErrRecordNotFound) {
+		t.Fatal("not true: errors.Is(err, db.ErrRecordNotFound)")
+	}
 }

@@ -29,7 +29,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/gorilla/mux"
-	"github.com/matryer/is"
 	_ "modernc.org/sqlite"
 )
 
@@ -44,29 +43,38 @@ import (
 // to.
 func TestLFSLockLookupIsScopedToRepository(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be, datastore := env.ctx, env.be, env.datastore
 	dbx := env.dbx
 
 	// The victim owns a private repository with a lock on a sensitive path.
 	victim, err := be.CreateUser(ctx, "victim", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	victimRepo, err := be.CreateRepository(ctx, "victim-repo", victim, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := datastore.CreateLFSLockForUser(ctx, dbx, victimRepo.ID(), victim.ID(), "secret/plans.bin", "refs/heads/main"); err != nil {
 		t.Fatal(err)
 	}
 
 	victimLock, err := datastore.GetLFSLockForPath(ctx, dbx, victimRepo.ID(), "secret/plans.bin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The attacker owns their own repository, so they have write access to
 	// it, but no access at all to the victim's repository.
 	attacker, err := be.CreateUser(ctx, "attacker", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	attackerRepo, err := be.CreateRepository(ctx, "attacker-repo", attacker, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The store must not return a lock that belongs to another repository.
 	_, err = datastore.GetLFSLockByID(ctx, dbx, attackerRepo.ID(), victimLock.ID)
@@ -76,8 +84,12 @@ func TestLFSLockLookupIsScopedToRepository(t *testing.T) {
 
 	// The owner can still read their own lock by ID.
 	got, err := datastore.GetLFSLockByID(ctx, dbx, victimRepo.ID(), victimLock.ID)
-	is.NoErr(err)
-	is.Equal(got.Path, "secret/plans.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := got.Path; got != "secret/plans.bin" {
+		t.Fatalf("got.Path = %v, want %v", got, "secret/plans.bin")
+	}
 }
 
 // TestLFSLocksGetDoesNotLeakAcrossRepositories drives the HTTP lock list
@@ -85,25 +97,34 @@ func TestLFSLockLookupIsScopedToRepository(t *testing.T) {
 // asking for a lock ID that belongs to somebody else's private repository.
 func TestLFSLocksGetDoesNotLeakAcrossRepositories(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be, datastore := env.ctx, env.be, env.datastore
 	dbx := env.dbx
 
 	victim, err := be.CreateUser(ctx, "victim", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	victimRepo, err := be.CreateRepository(ctx, "victim-repo", victim, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := datastore.CreateLFSLockForUser(ctx, dbx, victimRepo.ID(), victim.ID(), "secret/plans.bin", "refs/heads/main"); err != nil {
 		t.Fatal(err)
 	}
 	victimLock, err := datastore.GetLFSLockForPath(ctx, dbx, victimRepo.ID(), "secret/plans.bin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	attacker, err := be.CreateUser(ctx, "attacker", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	attackerRepo, err := be.CreateRepository(ctx, "attacker-repo", attacker, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Request the victim's lock ID while scoped to the attacker's own
 	// repository, which is exactly what the route authorizes.
@@ -129,12 +150,20 @@ func TestLFSLocksGetDoesNotLeakAcrossRepositories(t *testing.T) {
 
 	w = httptest.NewRecorder()
 	s.serveRoute((*server).serviceLfsLocks, w, req, routeCaller{user: victim, repo: victimRepo})
-	is.Equal(w.Code, http.StatusOK)
+	if got := w.Code; got != http.StatusOK {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+	}
 
 	var resp lfs.LockListResponse
-	is.NoErr(json.NewDecoder(w.Body).Decode(&resp))
-	is.Equal(len(resp.Locks), 1)
-	is.Equal(resp.Locks[0].Path, "secret/plans.bin")
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(resp.Locks); got != 1 {
+		t.Fatalf("len(resp.Locks) = %v, want %v", got, 1)
+	}
+	if got := resp.Locks[0].Path; got != "secret/plans.bin" {
+		t.Fatalf("resp.Locks[0].Path = %v, want %v", got, "secret/plans.bin")
+	}
 }
 
 // TestLFSLocksDeleteDoesNotLeakAcrossRepositories covers the unlock route,
@@ -144,25 +173,34 @@ func TestLFSLocksGetDoesNotLeakAcrossRepositories(t *testing.T) {
 // it, but it is the same unscoped lookup.
 func TestLFSLocksDeleteDoesNotLeakAcrossRepositories(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be, datastore := env.ctx, env.be, env.datastore
 	dbx := env.dbx
 
 	victim, err := be.CreateUser(ctx, "victim", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	victimRepo, err := be.CreateRepository(ctx, "victim-repo", victim, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := datastore.CreateLFSLockForUser(ctx, dbx, victimRepo.ID(), victim.ID(), "secret/plans.bin", "refs/heads/main"); err != nil {
 		t.Fatal(err)
 	}
 	victimLock, err := datastore.GetLFSLockForPath(ctx, dbx, victimRepo.ID(), "secret/plans.bin")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	attacker, err := be.CreateUser(ctx, "attacker", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	attackerRepo, err := be.CreateRepository(ctx, "attacker-repo", attacker, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost,
 		"/attacker-repo.git/info/lfs/locks/"+strconv.FormatInt(victimLock.ID, 10)+"/unlock",
@@ -176,7 +214,9 @@ func TestLFSLocksDeleteDoesNotLeakAcrossRepositories(t *testing.T) {
 
 	// Guard against the request never reaching the lookup: a missing or
 	// unparseable lock_id would make this test vacuously pass.
-	is.Equal(w.Code, http.StatusNotFound)
+	if got := w.Code; got != http.StatusNotFound {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusNotFound)
+	}
 
 	body := w.Body.String()
 	if strings.Contains(body, "secret/plans.bin") {
@@ -188,8 +228,12 @@ func TestLFSLocksDeleteDoesNotLeakAcrossRepositories(t *testing.T) {
 
 	// The victim's lock must still exist.
 	still, err := datastore.GetLFSLockByID(ctx, dbx, victimRepo.ID(), victimLock.ID)
-	is.NoErr(err)
-	is.Equal(still.Path, "secret/plans.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := still.Path; got != "secret/plans.bin" {
+		t.Fatalf("still.Path = %v, want %v", got, "secret/plans.bin")
+	}
 }
 
 // forgeableServices are the service names that select a non-LFS branch in
@@ -205,16 +249,19 @@ var forgeableServices = []string{"git-upload-pack", "git-receive-pack", "git-upl
 // an unauthenticated caller could write objects into any public repository.
 func TestLFSUploadRejectsForgedServiceParam(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be, datastore := env.ctx, env.be, env.datastore
 	cfg := env.cfg
 	dbx := env.dbx
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	repo, err := be.CreateRepository(ctx, "victim-repo", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	router := env.gitRouter(t)
 	oid := strings.Repeat("a", 64)
@@ -230,7 +277,9 @@ func TestLFSUploadRejectsForgedServiceParam(t *testing.T) {
 
 	// Baseline: anonymous read-only access cannot upload. It is asked for
 	// credentials (401), which git-lfs needs before it will send any.
-	is.Equal(upload(path).Code, http.StatusUnauthorized)
+	if got := upload(path).Code; got != http.StatusUnauthorized {
+		t.Fatalf("upload(path).Code = %v, want %v", got, http.StatusUnauthorized)
+	}
 
 	for _, service := range forgeableServices {
 		w := upload(path + "?service=" + service)
@@ -255,21 +304,28 @@ func TestLFSUploadRejectsForgedServiceParam(t *testing.T) {
 // same bypass: a read-only collaborator could take locks on arbitrary paths.
 func TestLFSLockCreateRejectsForgedServiceParam(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be, datastore := env.ctx, env.be, env.datastore
 	dbx := env.dbx
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	repo, err := be.CreateRepository(ctx, "victim-repo", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// An authenticated user with no more than read access to the repository.
 	attacker, err := be.CreateUser(ctx, "attacker", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	token, err := be.CreateAccessToken(ctx, attacker, "test", time.Time{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	router := env.gitRouter(t)
 
@@ -284,7 +340,9 @@ func TestLFSLockCreateRejectsForgedServiceParam(t *testing.T) {
 		return w
 	}
 
-	is.Equal(lock("/victim-repo.git/info/lfs/locks").Code, http.StatusForbidden)
+	if got := lock("/victim-repo.git/info/lfs/locks").Code; got != http.StatusForbidden {
+		t.Fatalf("lock(\"/victim-repo.git/info/lfs/locks\").Code = %v, want %v", got, http.StatusForbidden)
+	}
 
 	for _, service := range forgeableServices {
 		w := lock("/victim-repo.git/info/lfs/locks?service=" + service)
@@ -304,7 +362,6 @@ func TestLFSLockCreateRejectsForgedServiceParam(t *testing.T) {
 // administrator had turned it off.
 func TestLFSDisabledRejectsForgedServiceParam(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be := env.ctx, env.be
 
@@ -312,9 +369,13 @@ func TestLFSDisabledRejectsForgedServiceParam(t *testing.T) {
 	cfg.LFS.Enabled = false
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "victim-repo", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	router := env.gitRouter(t)
 	url := "/victim-repo.git/info/lfs/objects/basic/" + strings.Repeat("a", 64)
@@ -336,17 +397,22 @@ func TestLFSDisabledRejectsForgedServiceParam(t *testing.T) {
 // object and take a lock, with or without a service parameter present.
 func TestLFSWriteStillWorksForAuthorizedUser(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be, datastore := env.ctx, env.be, env.datastore
 	dbx := env.dbx
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	repo, err := be.CreateRepository(ctx, "owner-repo", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	token, err := be.CreateAccessToken(ctx, owner, "test", time.Time{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	router := env.gitRouter(t)
 	body := "payload"
@@ -359,11 +425,17 @@ func TestLFSWriteStillWorksForAuthorizedUser(t *testing.T) {
 	req.Header.Set("Authorization", "token "+token)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
-	is.Equal(w.Code, http.StatusOK)
+	if got := w.Code; got != http.StatusOK {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+	}
 
 	obj, err := datastore.GetLFSObjectByOid(ctx, dbx, repo.ID(), oid)
-	is.NoErr(err)
-	is.Equal(obj.Oid, oid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := obj.Oid; got != oid {
+		t.Fatalf("obj.Oid = %v, want %v", got, oid)
+	}
 
 	// A service parameter on an LFS route is ignored, not rejected.
 	req = httptest.NewRequestWithContext(ctx, http.MethodPost,
@@ -374,11 +446,17 @@ func TestLFSWriteStillWorksForAuthorizedUser(t *testing.T) {
 	req.Header.Set("Authorization", "token "+token)
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
-	is.Equal(w.Code, http.StatusCreated)
+	if got := w.Code; got != http.StatusCreated {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusCreated)
+	}
 
 	got, err := datastore.GetLFSLockForPath(ctx, dbx, repo.ID(), "src/file.bin")
-	is.NoErr(err)
-	is.Equal(got.Path, "src/file.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := got.Path; got != "src/file.bin" {
+		t.Fatalf("got.Path = %v, want %v", got, "src/file.bin")
+	}
 }
 
 // TestLFSWriteDeniedAsksAnonymousForCredentials checks how an LFS write is
@@ -461,14 +539,17 @@ func TestLFSWriteDeniedAsksAnonymousForCredentials(t *testing.T) { //nolint:tpar
 // are capped.
 func TestLFSBatchRejectsOversizedRequests(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be := env.ctx, env.be
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "repo", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	router := env.gitRouter(t)
 	batch := func(body string) *httptest.ResponseRecorder {
@@ -489,19 +570,27 @@ func TestLFSBatchRejectsOversizedRequests(t *testing.T) {
 	}
 
 	w := batch(objects(maxLfsBatchObjects))
-	is.Equal(w.Code, http.StatusOK)
+	if got := w.Code; got != http.StatusOK {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+	}
 
 	w = batch(objects(maxLfsBatchObjects + 1))
-	is.Equal(w.Code, http.StatusRequestEntityTooLarge)
+	if got := w.Code; got != http.StatusRequestEntityTooLarge {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusRequestEntityTooLarge)
+	}
 
 	big := `{"operation":"download","ref":{"name":"` + strings.Repeat("a", maxLfsBatchBodySize) + `"},"objects":[{"oid":"` + strings.Repeat("a", 64) + `","size":1}]}`
 	w = batch(big)
-	is.Equal(w.Code, http.StatusRequestEntityTooLarge)
+	if got := w.Code; got != http.StatusRequestEntityTooLarge {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusRequestEntityTooLarge)
+	}
 
 	// The object limit applies to uploads too, before the operation is
 	// handled.
 	w = batch(strings.Replace(objects(maxLfsBatchObjects+1), "download", "upload", 1))
-	is.Equal(w.Code, http.StatusRequestEntityTooLarge)
+	if got := w.Code; got != http.StatusRequestEntityTooLarge {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusRequestEntityTooLarge)
+	}
 }
 
 // TestLFSJSONBodiesAreLimited checks that the verify and lock endpoints, which
@@ -509,16 +598,21 @@ func TestLFSBatchRejectsOversizedRequests(t *testing.T) {
 // reading them into memory.
 func TestLFSJSONBodiesAreLimited(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be := env.ctx, env.be
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "repo", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	token, err := be.CreateAccessToken(ctx, owner, "test", time.Time{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	router := env.gitRouter(t)
 	padding := strings.Repeat("a", maxLfsJSONBodySize)
@@ -553,25 +647,32 @@ func TestLFSJSONBodiesAreLimited(t *testing.T) {
 // would pass verification.
 func TestLFSVerifyRejectsStoredSizeMismatch(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be, datastore := env.ctx, env.be, env.datastore
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	repo, err := be.CreateRepository(ctx, "repo", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	pointer := lfs.Pointer{
 		Oid:  "4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393",
 		Size: 12,
 	}
 	dbx := env.dbx
-	is.NoErr(datastore.CreateLFSObject(ctx, dbx, repo.ID(), pointer.Oid, pointer.Size))
+	if err := datastore.CreateLFSObject(ctx, dbx, repo.ID(), pointer.Oid, pointer.Size); err != nil {
+		t.Fatal(err)
+	}
 
 	objPath := filepath.Join(env.cfg.DataPath, "lfs",
 		strconv.FormatInt(repo.ID(), 10), "objects", filepath.FromSlash(pointer.RelativePath()))
-	is.NoErr(os.MkdirAll(filepath.Dir(objPath), 0o755))
+	if err := os.MkdirAll(filepath.Dir(objPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	router := env.gitRouter(t)
 	verify := func() *httptest.ResponseRecorder {
@@ -585,13 +686,17 @@ func TestLFSVerifyRejectsStoredSizeMismatch(t *testing.T) {
 	}
 
 	// Truncated on disk: must not verify.
-	is.NoErr(os.WriteFile(objPath, []byte("short"), 0o644))
+	if err := os.WriteFile(objPath, []byte("short"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if w := verify(); w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("truncated object: got status %d, want 422: %s", w.Code, w.Body.String())
 	}
 
 	// Intact on disk: verifies.
-	is.NoErr(os.WriteFile(objPath, []byte("hello world\n"), 0o644))
+	if err := os.WriteFile(objPath, []byte("hello world\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if w := verify(); w.Code != http.StatusOK {
 		t.Fatalf("intact object: got status %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -602,22 +707,29 @@ func TestLFSVerifyRejectsStoredSizeMismatch(t *testing.T) {
 // because it exists and its row has the right size.
 func TestLFSBatchDownloadShortObjectIsNotOffered(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be, datastore := env.ctx, env.be, env.datastore
 	dbx := env.dbx
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	repo, err := be.CreateRepository(ctx, "repo", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	content := "payload"
 	oid := "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5" // sha256(content)
-	is.NoErr(datastore.CreateLFSObject(ctx, dbx, repo.ID(), oid, int64(len(content))))
+	if err := datastore.CreateLFSObject(ctx, dbx, repo.ID(), oid, int64(len(content))); err != nil {
+		t.Fatal(err)
+	}
 	cfg := env.cfg
 	objPath := filepath.Join(cfg.DataPath, "lfs", strconv.FormatInt(repo.ID(), 10), "objects", oid[0:2], oid[2:4], oid)
-	is.NoErr(os.MkdirAll(filepath.Dir(objPath), 0o755))
+	if err := os.MkdirAll(filepath.Dir(objPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	router := env.gitRouter(t)
 	batch := func() lfs.ObjectResponse {
@@ -629,20 +741,30 @@ func TestLFSBatchDownloadShortObjectIsNotOffered(t *testing.T) {
 		req.Header.Set("Accept", lfs.MediaType)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
-		is.Equal(w.Code, http.StatusOK)
+		if got := w.Code; got != http.StatusOK {
+			t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+		}
 		var resp lfs.BatchResponse
-		is.NoErr(json.Unmarshal(w.Body.Bytes(), &resp))
-		is.Equal(len(resp.Objects), 1)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if got := len(resp.Objects); got != 1 {
+			t.Fatalf("len(resp.Objects) = %v, want %v", got, 1)
+		}
 		return *resp.Objects[0]
 	}
 
-	is.NoErr(os.WriteFile(objPath, []byte(content[:3]), 0o600))
+	if err := os.WriteFile(objPath, []byte(content[:3]), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	got := batch()
 	if got.Error == nil || got.Actions[lfs.ActionDownload] != nil {
 		t.Fatalf("short object: got error %+v, actions %v; want an error and no download", got.Error, got.Actions)
 	}
 
-	is.NoErr(os.WriteFile(objPath, []byte(content), 0o600))
+	if err := os.WriteFile(objPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	got = batch()
 	if got.Error != nil || got.Actions[lfs.ActionDownload] == nil {
 		t.Fatalf("complete object: got error %+v, actions %v; want a download", got.Error, got.Actions)
@@ -1162,7 +1284,6 @@ func TestLFSUploadAbortedBody(t *testing.T) {
 // in expires_in.
 func TestLFSBatchActionsForwardOnlyJWT(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be, datastore := env.ctx, env.be, env.datastore
 
@@ -1170,23 +1291,37 @@ func TestLFSBatchActionsForwardOnlyJWT(t *testing.T) {
 	env.writeHostKey(t)
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "repo", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	token, err := be.CreateAccessToken(ctx, owner, "t", time.Time{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	jwtToken := env.mintJWT(t, owner, "repo")
 
 	// An object that exists, so a download batch returns an action.
 	body := "payload"
 	oid := "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5" // sha256(body)
 	repo, err := be.Repository(ctx, "repo")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	objPath := filepath.Join(cfg.DataPath, "lfs", strconv.FormatInt(repo.ID(), 10), "objects",
 		filepath.FromSlash(lfs.Pointer{Oid: oid}.RelativePath()))
-	is.NoErr(os.MkdirAll(filepath.Dir(objPath), 0o755))
-	is.NoErr(os.WriteFile(objPath, []byte(body), 0o644))
-	is.NoErr(datastore.CreateLFSObject(ctx, env.dbx, repo.ID(), oid, int64(len(body))))
+	if err := os.MkdirAll(filepath.Dir(objPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(objPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := datastore.CreateLFSObject(ctx, env.dbx, repo.ID(), oid, int64(len(body))); err != nil {
+		t.Fatal(err)
+	}
 
 	// An object the server does not have, so an upload batch returns
 	// actions: objects already stored get none.
@@ -1210,8 +1345,12 @@ func TestLFSBatchActionsForwardOnlyJWT(t *testing.T) {
 			t.Fatalf("%s batch: got status %d: %s", op, w.Code, w.Body.String())
 		}
 		var resp lfs.BatchResponse
-		is.NoErr(json.Unmarshal(w.Body.Bytes(), &resp))
-		is.Equal(len(resp.Objects), 1)
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if got := len(resp.Objects); got != 1 {
+			t.Fatalf("len(resp.Objects) = %v, want %v", got, 1)
+		}
 		if resp.Objects[0].Error != nil {
 			t.Fatalf("%s batch: object error: %+v", op, resp.Objects[0].Error)
 		}
@@ -1222,22 +1361,30 @@ func TestLFSBatchActionsForwardOnlyJWT(t *testing.T) {
 	for _, auth := range []string{basic, "token " + token} {
 		for _, op := range []string{lfs.OperationDownload, lfs.OperationUpload} {
 			resp := batch(op, auth)
-			is.True(len(resp.Objects[0].Actions) > 0)
+			if len(resp.Objects[0].Actions) <= 0 {
+				t.Fatal("not true: len(resp.Objects[0].Actions) > 0")
+			}
 			for name, action := range resp.Objects[0].Actions {
 				if _, ok := action.Header["Authorization"]; ok {
 					t.Errorf("%s %s action echoes the caller's %q credential", op, name, strings.Fields(auth)[0])
 				}
-				is.True(action.ExpiresIn == nil)
+				if action.ExpiresIn != nil {
+					t.Fatal("not true: action.ExpiresIn == nil")
+				}
 			}
 		}
 	}
 	// The upload action keeps its Content-Type without a credential.
 	up := batch(lfs.OperationUpload, basic).Objects[0].Actions[lfs.ActionUpload]
-	is.Equal(up.Header["Content-Type"], "application/octet-stream")
+	if got := up.Header["Content-Type"]; got != "application/octet-stream" {
+		t.Fatalf("up.Header[\"Content-Type\"] = %v, want %v", got, "application/octet-stream")
+	}
 
 	for _, op := range []string{lfs.OperationDownload, lfs.OperationUpload} {
 		resp := batch(op, "Bearer "+jwtToken)
-		is.True(len(resp.Objects[0].Actions) > 0)
+		if len(resp.Objects[0].Actions) <= 0 {
+			t.Fatal("not true: len(resp.Objects[0].Actions) > 0")
+		}
 		for name, action := range resp.Objects[0].Actions {
 			if got := action.Header["Authorization"]; got != "Bearer "+jwtToken {
 				t.Errorf("%s %s action: Authorization = %q, want the JWT", op, name, got)

@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // newSettingsTestContext returns a context wired with a config, a real
@@ -19,14 +18,15 @@ import (
 // mutate AnonAccess/AllowKeyless to simulate a config override.
 func newSettingsTestContext(t *testing.T) (context.Context, *config.Config) {
 	t.Helper()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	cfg := cmdsOf(ctx).cfg
 
 	// "admin" is already taken by the default user the migration seeds, so
 	// use a distinct username for the test's admin.
 	admin, err := be.CreateUser(ctx, "testadmin", proto.UserOptions{Admin: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx = proto.WithUserContext(ctx, admin)
 
 	return ctx, cfg
@@ -45,13 +45,16 @@ func runSettings(t *testing.T, ctx context.Context, args ...string) (stdout, std
 
 func TestSettingsAnonAccessWarnsOnConfigOverride(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, cfg := newSettingsTestContext(t)
 
 	// No override active: setting anon-access should succeed silently.
 	_, stderr, err := runSettings(t, ctx, "anon-access", "read-write")
-	is.NoErr(err)
-	is.Equal(stderr, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stderr; got != "" {
+		t.Fatalf("stderr = %v, want %v", got, "")
+	}
 
 	// With a config override active, the write still succeeds (so it takes
 	// effect if the override is later removed), but must warn loudly that
@@ -59,7 +62,9 @@ func TestSettingsAnonAccessWarnsOnConfigOverride(t *testing.T) {
 	adminAccess := access.AdminAccess
 	cfg.AnonAccess = &adminAccess
 	_, stderr, err = runSettings(t, ctx, "anon-access", "no-access")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(stderr, "override") {
 		t.Fatalf("expected override warning on stderr, got: %q", stderr)
 	}
@@ -67,13 +72,16 @@ func TestSettingsAnonAccessWarnsOnConfigOverride(t *testing.T) {
 
 func TestSettingsAllowKeylessWarnsOnConfigOverride(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, cfg := newSettingsTestContext(t)
 
 	// No override active: setting allow-keyless should succeed silently.
 	_, stderr, err := runSettings(t, ctx, "allow-keyless", "false")
-	is.NoErr(err)
-	is.Equal(stderr, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stderr; got != "" {
+		t.Fatalf("stderr = %v, want %v", got, "")
+	}
 
 	// With a config override active, the write still succeeds, but must
 	// warn that it currently has no effect. This is the dangerous
@@ -82,7 +90,9 @@ func TestSettingsAllowKeylessWarnsOnConfigOverride(t *testing.T) {
 	allow := true
 	cfg.AllowKeyless = &allow
 	_, stderr, err = runSettings(t, ctx, "allow-keyless", "false")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(stderr, "override") {
 		t.Fatalf("expected override warning on stderr, got: %q", stderr)
 	}

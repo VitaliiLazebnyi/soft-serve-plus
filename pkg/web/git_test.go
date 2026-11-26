@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -40,7 +41,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
-	"github.com/matryer/is"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -68,19 +68,23 @@ func (f *oracleFixture) send(method, path string, hdr map[string]string, body st
 // Auth-params of a challenge are separated by commas (RFC 7235).
 func TestCredentialsChallengeSyntax(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	w := f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", "")
-	is.Equal(w.Code, http.StatusUnauthorized)
-	is.Equal(w.Header().Get("WWW-Authenticate"), `Basic realm="Git", charset="UTF-8", Token, Bearer`)
-	is.Equal(w.Header().Get("LFS-Authenticate"), `Basic realm="Git LFS", charset="UTF-8", Token, Bearer`)
+	if got := w.Code; got != http.StatusUnauthorized {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusUnauthorized)
+	}
+	if got := w.Header().Get("WWW-Authenticate"); got != `Basic realm="Git", charset="UTF-8", Token, Bearer` {
+		t.Fatalf("w.Header().Get(\"WWW-Authenticate\") = %v, want %v", got, `Basic realm="Git", charset="UTF-8", Token, Bearer`)
+	}
+	if got := w.Header().Get("LFS-Authenticate"); got != `Basic realm="Git LFS", charset="UTF-8", Token, Bearer` {
+		t.Fatalf("w.Header().Get(\"LFS-Authenticate\") = %v, want %v", got, `Basic realm="Git LFS", charset="UTF-8", Token, Bearer`)
+	}
 }
 
 // A wrong method gets 405 with an Allow header whatever the protocol
 // version, and a route that answers GET answers HEAD too.
 func TestMethodNotAllowed(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := f.ownerAuth(t)
 
@@ -92,40 +96,61 @@ func TestMethodNotAllowed(t *testing.T) {
 		req.Proto, req.ProtoMajor, req.ProtoMinor = tc.name, tc.major, tc.minor
 		w := httptest.NewRecorder()
 		f.handler.ServeHTTP(w, req)
-		is.Equal(w.Code, http.StatusMethodNotAllowed)
-		is.Equal(w.Header().Get("Allow"), http.MethodPost)
+		if got := w.Code; got != http.StatusMethodNotAllowed {
+			t.Fatalf("w.Code = %v, want %v", got, http.StatusMethodNotAllowed)
+		}
+		if got := w.Header().Get("Allow"); got != http.MethodPost {
+			t.Fatalf("w.Header().Get(\"Allow\") = %v, want %v", got, http.MethodPost)
+		}
 	}
 
 	w := f.do(http.MethodPost, "/secret.git/info/refs", auth)
-	is.Equal(w.Code, http.StatusMethodNotAllowed)
-	is.Equal(w.Header().Get("Allow"), "GET, HEAD")
+	if got := w.Code; got != http.StatusMethodNotAllowed {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusMethodNotAllowed)
+	}
+	if got := w.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Fatalf("w.Header().Get(\"Allow\") = %v, want %v", got, "GET, HEAD")
+	}
 
-	is.Equal(f.do(http.MethodHead, "/secret.git/info/refs?service=git-upload-pack", auth).Code, http.StatusOK)
+	if got := f.do(http.MethodHead, "/secret.git/info/refs?service=git-upload-pack", auth).Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodHead, \"/secret.git/info/refs?service=git-upload-pack\", auth).Code = %v, want %v", got, http.StatusOK)
+	}
 
 	// HEAD on the push advertisement of a missing repository does not
 	// create it, though GET would for a caller who may push.
-	is.Equal(f.do(http.MethodHead, "/fresh.git/info/refs?service=git-receive-pack", "Token "+f.token).Code, http.StatusNotFound)
-	is.True(!f.exists("fresh"))
+	if got := f.do(http.MethodHead, "/fresh.git/info/refs?service=git-receive-pack", "Token "+f.token).Code; got != http.StatusNotFound {
+		t.Fatalf("f.do(http.MethodHead, \"/fresh.git/info/refs?service=git-receive-pack\", \"Token \"+f.token).Code = %v, want %v", got, http.StatusNotFound)
+	}
+	if f.exists("fresh") {
+		t.Fatal("not true: !f.exists(\"fresh\")")
+	}
 }
 
 // The RPC endpoints answer 415 to any body but the service's request type,
 // as git http-backend does, and their responses are not cached.
 func TestServiceRPCContentType(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := f.ownerAuth(t)
 
 	for _, ct := range []string{"", "text/plain", "application/x-git-upload-pack-requestx", "application/x-git-receive-pack-request"} {
 		w := f.send(http.MethodPost, "/secret.git/git-upload-pack", map[string]string{"Authorization": auth, "Content-Type": ct}, "")
-		is.Equal(w.Code, http.StatusUnsupportedMediaType)
+		if got := w.Code; got != http.StatusUnsupportedMediaType {
+			t.Fatalf("w.Code = %v, want %v", got, http.StatusUnsupportedMediaType)
+		}
 	}
 
 	for _, ct := range []string{"application/x-git-upload-pack-request", "application/x-git-upload-pack-request; charset=utf-8"} {
 		w := f.send(http.MethodPost, "/secret.git/git-upload-pack", map[string]string{"Authorization": auth, "Content-Type": ct}, "0000")
-		is.Equal(w.Code, http.StatusOK)
-		is.Equal(w.Header().Get("Content-Type"), "application/x-git-upload-pack-result")
-		is.Equal(w.Header().Get("Cache-Control"), "no-cache, max-age=0, must-revalidate")
+		if got := w.Code; got != http.StatusOK {
+			t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+		}
+		if got := w.Header().Get("Content-Type"); got != "application/x-git-upload-pack-result" {
+			t.Fatalf("w.Header().Get(\"Content-Type\") = %v, want %v", got, "application/x-git-upload-pack-result")
+		}
+		if got := w.Header().Get("Cache-Control"); got != "no-cache, max-age=0, must-revalidate" {
+			t.Fatalf("w.Header().Get(\"Cache-Control\") = %v, want %v", got, "no-cache, max-age=0, must-revalidate")
+		}
 	}
 }
 
@@ -143,7 +168,6 @@ func signJWT(t *testing.T, e *testEnv, claims jwt.RegisteredClaims) string {
 // A bearer token must expire.
 func TestBearerTokenRequiresExpiry(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	now := time.Now()
 	claims := jwt.RegisteredClaims{
@@ -153,50 +177,78 @@ func TestBearerTokenRequiresExpiry(t *testing.T) {
 		Audience: []string{"secret"},
 	}
 	const path = "/secret.git/info/refs?service=git-upload-pack"
-	is.Equal(f.do(http.MethodGet, path, "Bearer "+signJWT(t, f.env, claims)).Code, http.StatusForbidden)
+	if got := f.do(http.MethodGet, path, "Bearer "+signJWT(t, f.env, claims)).Code; got != http.StatusForbidden {
+		t.Fatalf("f.do(http.MethodGet, path, \"Bearer \"+signJWT(t, f.env, claims)).Code = %v, want %v", got, http.StatusForbidden)
+	}
 
 	claims.ExpiresAt = jwt.NewNumericDate(now.Add(time.Hour))
-	is.Equal(f.do(http.MethodGet, path, "Bearer "+signJWT(t, f.env, claims)).Code, http.StatusOK)
+	if got := f.do(http.MethodGet, path, "Bearer "+signJWT(t, f.env, claims)).Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, path, \"Bearer \"+signJWT(t, f.env, claims)).Code = %v, want %v", got, http.StatusOK)
+	}
 }
 
 // go get of a package inside a repository accepts a token minted for the
 // repository, but not one minted for another repository.
 func TestGoGetBearerTokenForParentRepository(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 
 	for _, path := range []string{"/secret?go-get=1", "/secret/sub/pkg?go-get=1", "/secret.git/sub?go-get=1"} {
 		w := f.do(http.MethodGet, path, "Bearer "+f.mintJWT(t, f.owner, "secret"))
-		is.Equal(w.Code, http.StatusOK)
-		is.True(strings.Contains(w.Body.String(), `name="go-import"`))
-		is.True(strings.Contains(w.Body.String(), "https://pkg.go.dev/"))
+		if got := w.Code; got != http.StatusOK {
+			t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+		}
+		if !strings.Contains(w.Body.String(), `name="go-import"`) {
+			t.Fatal("not true: strings.Contains(w.Body.String(), `name=\"go-import\"`)")
+		}
+		if !strings.Contains(w.Body.String(), "https://pkg.go.dev/") {
+			t.Fatal("not true: strings.Contains(w.Body.String(), \"https://pkg.go.dev/\")")
+		}
 	}
-	is.Equal(f.do(http.MethodGet, "/secret/sub?go-get=1", "Bearer "+f.mintJWT(t, f.owner, "other")).Code, http.StatusForbidden)
-	is.Equal(f.do(http.MethodGet, "/secret/sub?go-get=1", "Bearer "+f.mintJWT(t, f.owner, "secret/sub/pkg")).Code, http.StatusForbidden)
+	if got := f.do(http.MethodGet, "/secret/sub?go-get=1", "Bearer "+f.mintJWT(t, f.owner, "other")).Code; got != http.StatusForbidden {
+		t.Fatalf("f.do(http.MethodGet, \"/secret/sub?go-get=1\", \"Bearer \"+f.mintJWT(t, f.owner, \"other\")).Code = %v, want %v", got, http.StatusForbidden)
+	}
+	if got := f.do(http.MethodGet, "/secret/sub?go-get=1", "Bearer "+f.mintJWT(t, f.owner, "secret/sub/pkg")).Code; got != http.StatusForbidden {
+		t.Fatalf("f.do(http.MethodGet, \"/secret/sub?go-get=1\", \"Bearer \"+f.mintJWT(t, f.owner, \"secret/sub/pkg\")).Code = %v, want %v", got, http.StatusForbidden)
+	}
 
 	// A token for "secret" does not reveal the nested repository
 	// "secret/sub", even to a caller who may read it: the walk skips it
 	// and answers for "secret".
 	_, err := f.be.CreateRepository(f.ctx, "secret/sub", f.owner, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, path := range []string{"/secret/sub?go-get=1", "/secret/sub/pkg?go-get=1"} {
 		w := f.do(http.MethodGet, path, "Bearer "+f.mintJWT(t, f.owner, "secret"))
-		is.Equal(w.Code, http.StatusOK)
-		is.True(strings.Contains(w.Body.String(), "/secret.git"))
-		is.True(!strings.Contains(w.Body.String(), "secret/sub"))
+		if got := w.Code; got != http.StatusOK {
+			t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+		}
+		if !strings.Contains(w.Body.String(), "/secret.git") {
+			t.Fatal("not true: strings.Contains(w.Body.String(), \"/secret.git\")")
+		}
+		if strings.Contains(w.Body.String(), "secret/sub") {
+			t.Fatal("not true: !strings.Contains(w.Body.String(), \"secret/sub\")")
+		}
 
 		w = f.do(http.MethodGet, path, "Bearer "+f.mintJWT(t, f.owner, "secret/sub"))
-		is.Equal(w.Code, http.StatusOK)
-		is.True(strings.Contains(w.Body.String(), "/secret/sub.git"))
+		if got := w.Code; got != http.StatusOK {
+			t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+		}
+		if !strings.Contains(w.Body.String(), "/secret/sub.git") {
+			t.Fatal("not true: strings.Contains(w.Body.String(), \"/secret/sub.git\")")
+		}
 	}
 }
 
 func TestPathAncestors(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
-	is.Equal(pathAncestors("a"), []string{"a"})
-	is.Equal(pathAncestors("a.git/b/c"), []string{"a.git/b/c", "a.git/b", "a"})
+	if got, want := pathAncestors("a"), ([]string{"a"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("pathAncestors(\"a\") = %v, want %v", got, want)
+	}
+	if got, want := pathAncestors("a.git/b/c"), ([]string{"a.git/b/c", "a.git/b", "a"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("pathAncestors(\"a.git/b/c\") = %v, want %v", got, want)
+	}
 }
 
 // LFS JSON endpoints answer media type errors in JSON: 406 for the Accept
@@ -204,7 +256,6 @@ func TestPathAncestors(t *testing.T) {
 // header.
 func TestLFSMediaTypes(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := f.ownerAuth(t)
 	const batch = "/secret.git/info/lfs/objects/batch"
@@ -222,55 +273,79 @@ func TestLFSMediaTypes(t *testing.T) {
 		{lfs.MediaType, lfs.MediaType + "; charset=utf-8", http.StatusOK},
 	} {
 		w := f.send(http.MethodPost, batch, map[string]string{"Authorization": auth, "Accept": tc.accept, "Content-Type": tc.contentType}, body)
-		is.Equal(w.Code, tc.code)
-		is.Equal(w.Header().Get("Content-Type"), lfs.MediaType)
-		is.Equal(w.Header().Get("Accept"), "")
+		if got := w.Code; got != tc.code {
+			t.Fatalf("w.Code = %v, want %v", got, tc.code)
+		}
+		if got := w.Header().Get("Content-Type"); got != lfs.MediaType {
+			t.Fatalf("w.Header().Get(\"Content-Type\") = %v, want %v", got, lfs.MediaType)
+		}
+		if got := w.Header().Get("Accept"); got != "" {
+			t.Fatalf("w.Header().Get(\"Accept\") = %v, want %v", got, "")
+		}
 		var resp map[string]any
-		is.NoErr(json.Unmarshal(w.Body.Bytes(), &resp))
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	w := f.send(http.MethodGet, "/secret.git/info/lfs/locks", map[string]string{"Authorization": auth}, "")
-	is.Equal(w.Code, http.StatusNotAcceptable)
-	is.Equal(w.Header().Get("Content-Type"), lfs.MediaType)
+	if got := w.Code; got != http.StatusNotAcceptable {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusNotAcceptable)
+	}
+	if got := w.Header().Get("Content-Type"); got != lfs.MediaType {
+		t.Fatalf("w.Header().Get(\"Content-Type\") = %v, want %v", got, lfs.MediaType)
+	}
 }
 
 // The batch API answers 409 to a hash algorithm other than SHA-256.
 func TestLFSBatchHashAlgo(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := f.ownerAuth(t)
 	hdr := map[string]string{"Authorization": auth, "Accept": lfs.MediaType, "Content-Type": lfs.MediaType}
 	objects := `"objects":[{"oid":"` + strings.Repeat("a", 64) + `","size":1}]`
 
 	w := f.send(http.MethodPost, "/secret.git/info/lfs/objects/batch", hdr, `{"operation":"download","hash_algo":"sha512",`+objects+`}`)
-	is.Equal(w.Code, http.StatusConflict)
-	is.Equal(w.Header().Get("Content-Type"), lfs.MediaType)
+	if got := w.Code; got != http.StatusConflict {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusConflict)
+	}
+	if got := w.Header().Get("Content-Type"); got != lfs.MediaType {
+		t.Fatalf("w.Header().Get(\"Content-Type\") = %v, want %v", got, lfs.MediaType)
+	}
 
 	w = f.send(http.MethodPost, "/secret.git/info/lfs/objects/batch", hdr, `{"operation":"download","hash_algo":"sha256",`+objects+`}`)
-	is.Equal(w.Code, http.StatusOK)
+	if got := w.Code; got != http.StatusOK {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+	}
 }
 
 // Bad credentials get the same JSON 403 from LFS whether or not the caller
 // could read the repository anonymously.
 func TestLFSBadCredentialsAreJSON(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	_, err := f.be.CreateRepository(f.ctx, "public", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	badBasic := "Basic " + base64.StdEncoding.EncodeToString([]byte("owner:wrong-password"))
 	hdr := map[string]string{"Authorization": badBasic, "Accept": lfs.MediaType, "Content-Type": lfs.MediaType}
 	var want string
 	for _, repo := range []string{"secret", "public"} {
 		w := f.send(http.MethodPost, "/"+repo+".git/info/lfs/objects/batch", hdr, `{}`)
-		is.Equal(w.Code, http.StatusForbidden)
-		is.Equal(w.Header().Get("Content-Type"), lfs.MediaType)
+		if got := w.Code; got != http.StatusForbidden {
+			t.Fatalf("w.Code = %v, want %v", got, http.StatusForbidden)
+		}
+		if got := w.Header().Get("Content-Type"); got != lfs.MediaType {
+			t.Fatalf("w.Header().Get(\"Content-Type\") = %v, want %v", got, lfs.MediaType)
+		}
 		if want == "" {
 			want = w.Body.String()
 		}
-		is.Equal(w.Body.String(), want)
+		if got := w.Body.String(); got != want {
+			t.Fatalf("w.Body.String() = %v, want %v", got, want)
+		}
 	}
 }
 
@@ -278,25 +353,29 @@ func TestLFSBadCredentialsAreJSON(t *testing.T) {
 // the client asked for.
 func TestWithParamsKeepsURL(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	var inner string
 	router := mux.NewRouter()
 	router.Handle("/{repo:.*}/info/refs", withParams(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		inner = r.URL.Path
-		is.Equal(mux.Vars(r)["repo"], "a/b")
+		if got := mux.Vars(r)["repo"]; got != "a/b" {
+			t.Fatalf("mux.Vars(r)[\"repo\"] = %v, want %v", got, "a/b")
+		}
 	})))
 	req := httptest.NewRequestWithContext(f.ctx, http.MethodGet, "/a/b.git/info/refs", nil)
 	router.ServeHTTP(httptest.NewRecorder(), req)
-	is.Equal(inner, "/a/b.git/info/refs")
-	is.Equal(req.URL.Path, "/a/b.git/info/refs")
+	if got := inner; got != "/a/b.git/info/refs" {
+		t.Fatalf("inner = %v, want %v", got, "/a/b.git/info/refs")
+	}
+	if got := req.URL.Path; got != "/a/b.git/info/refs" {
+		t.Fatalf("req.URL.Path = %v, want %v", got, "/a/b.git/info/refs")
+	}
 }
 
 // A panic is answered with 500 and logged with its stack on the request
 // logger.
 func TestRecoverPanics(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	s := newServer(config.DefaultConfig(), nil, nil, nil, nil, logger)
@@ -306,18 +385,28 @@ func TestRecoverPanics(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	is.Equal(w.Code, http.StatusInternalServerError)
+	if got := w.Code; got != http.StatusInternalServerError {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusInternalServerError)
+	}
 	out := logs.String()
-	is.True(strings.Contains(out, "boom"))
-	is.True(strings.Contains(out, "path=/x"))
-	is.True(strings.Contains(out, "TestRecoverPanics"))
+	if !strings.Contains(out, "boom") {
+		t.Fatal("not true: strings.Contains(out, \"boom\")")
+	}
+	if !strings.Contains(out, "path=/x") {
+		t.Fatal("not true: strings.Contains(out, \"path=/x\")")
+	}
+	if !strings.Contains(out, "TestRecoverPanics") {
+		t.Fatal("not true: strings.Contains(out, \"TestRecoverPanics\")")
+	}
 
 	// http.ErrAbortHandler still aborts the response.
 	abort := s.recoverPanics(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic(http.ErrAbortHandler)
 	}))
 	defer func() {
-		is.Equal(recover(), http.ErrAbortHandler)
+		if got, want := recover(), http.ErrAbortHandler; !reflect.DeepEqual(got, want) {
+			t.Fatalf("recover() = %v, want %v", got, want)
+		}
 	}()
 	abort.ServeHTTP(httptest.NewRecorder(), req)
 }
@@ -326,18 +415,23 @@ func TestRecoverPanics(t *testing.T) {
 // stay errors.
 func TestServerErrorLog(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 	logger.SetLevel(log.InfoLevel)
 	l := stdlog.New(serverErrorLog{logger}, "", 0)
 
 	l.Printf("http: TLS handshake error from 127.0.0.1:1234: EOF")
-	is.Equal(logs.String(), "")
+	if got := logs.String(); got != "" {
+		t.Fatalf("logs.String() = %v, want %v", got, "")
+	}
 
 	l.Printf("http: Accept error: boom")
-	is.True(strings.Contains(logs.String(), "ERRO"))
-	is.True(strings.Contains(logs.String(), "http: Accept error: boom"))
+	if !strings.Contains(logs.String(), "ERRO") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"ERRO\")")
+	}
+	if !strings.Contains(logs.String(), "http: Accept error: boom") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"http: Accept error: boom\")")
+	}
 }
 
 // TestAuthorize pins the decision order for every kind of caller against
@@ -494,7 +588,6 @@ func (s anonFailsAfterStore) GetAnonAccess(ctx context.Context, h db.Handler) (a
 // failed lookup, not 500, and nothing is created.
 func TestPushCreateLookupFailureUnavailable(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx := env.ctx
 	ok, reads := &atomic.Int32{}, &atomic.Int32{}
@@ -503,9 +596,13 @@ func TestPushCreateLookupFailureUnavailable(t *testing.T) {
 	be := env.be
 
 	alice, err := be.CreateUser(ctx, "alice", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	token, err := be.CreateAccessToken(ctx, alice, "t", time.Now().Add(time.Hour))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	router := env.router(t)
 
 	// The request's access check reads the setting once; the create's
@@ -516,13 +613,21 @@ func TestPushCreateLookupFailureUnavailable(t *testing.T) {
 	req.Header.Set("Authorization", "Token "+token)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
-	is.Equal(w.Code, http.StatusServiceUnavailable)
-	is.Equal(w.Header().Get("Retry-After"), authRetryAfter)
-	is.Equal(w.Header().Get("WWW-Authenticate"), "")
+	if got := w.Code; got != http.StatusServiceUnavailable {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusServiceUnavailable)
+	}
+	if got := w.Header().Get("Retry-After"); got != authRetryAfter {
+		t.Fatalf("w.Header().Get(\"Retry-After\") = %v, want %v", got, authRetryAfter)
+	}
+	if got := w.Header().Get("WWW-Authenticate"); got != "" {
+		t.Fatalf("w.Header().Get(\"WWW-Authenticate\") = %v, want %v", got, "")
+	}
 
 	ok.Store(math.MaxInt32)
 	_, err = be.Repository(ctx, "new")
-	is.True(errors.Is(err, proto.ErrRepoNotFound))
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	}
 }
 
 // TestDumbHTTPIsRefused checks every request of the dumb HTTP protocol gets
@@ -530,14 +635,19 @@ func TestPushCreateLookupFailureUnavailable(t *testing.T) {
 // missing loose object.
 func TestDumbHTTPIsRefused(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	pubDir := filepath.Join(f.env.cfg.DataPath, "repos", "pub.git")
 	looseObj := "objects/12/" + strings.Repeat("3", 38)
-	is.NoErr(os.MkdirAll(filepath.Join(pubDir, "objects", "12"), 0o755))
-	is.NoErr(os.WriteFile(filepath.Join(pubDir, filepath.FromSlash(looseObj)), []byte("data"), 0o644))
+	if err := os.MkdirAll(filepath.Join(pubDir, "objects", "12"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pubDir, filepath.FromSlash(looseObj)), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	files := []string{
 		"info/refs",
@@ -560,12 +670,22 @@ func TestDumbHTTPIsRefused(t *testing.T) {
 			for _, auth := range auths {
 				for _, method := range []string{http.MethodGet, http.MethodHead} {
 					w := f.do(method, "/"+repo+".git/"+file, auth)
-					is.Equal(w.Code, http.StatusForbidden) // dumb request
-					is.Equal(w.Header().Get("Cache-Control"), "no-cache, max-age=0, must-revalidate")
-					is.Equal(w.Header().Get("Expires"), "Fri, 01 Jan 1980 00:00:00 GMT")
-					is.Equal(w.Header().Get("WWW-Authenticate"), "") // no credentials help
+					if got := w.Code; got != http.StatusForbidden {
+						t.Fatalf("w.Code = %v, want %v", got, http.StatusForbidden)
+					} // dumb request
+					if got := w.Header().Get("Cache-Control"); got != "no-cache, max-age=0, must-revalidate" {
+						t.Fatalf("w.Header().Get(\"Cache-Control\") = %v, want %v", got, "no-cache, max-age=0, must-revalidate")
+					}
+					if got := w.Header().Get("Expires"); got != "Fri, 01 Jan 1980 00:00:00 GMT" {
+						t.Fatalf("w.Header().Get(\"Expires\") = %v, want %v", got, "Fri, 01 Jan 1980 00:00:00 GMT")
+					}
+					if got := w.Header().Get("WWW-Authenticate"); got != "" {
+						t.Fatalf("w.Header().Get(\"WWW-Authenticate\") = %v, want %v", got, "")
+					} // no credentials help
 					if method == http.MethodGet {
-						is.Equal(w.Body.String(), errDumbHTTP.Error()+"\n")
+						if got, want := w.Body.String(), errDumbHTTP.Error()+"\n"; got != want {
+							t.Fatalf("w.Body.String() = %v, want %v", got, want)
+						}
 					}
 				}
 			}
@@ -574,13 +694,21 @@ func TestDumbHTTPIsRefused(t *testing.T) {
 
 	// Other methods are refused too, and nothing was created.
 	w := f.do(http.MethodPost, "/pub.git/HEAD", "")
-	is.Equal(w.Code, http.StatusMethodNotAllowed)
-	is.Equal(w.Header().Get("Allow"), "GET, HEAD")
+	if got := w.Code; got != http.StatusMethodNotAllowed {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusMethodNotAllowed)
+	}
+	if got := w.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Fatalf("w.Header().Get(\"Allow\") = %v, want %v", got, "GET, HEAD")
+	}
 	_, err = f.be.Repository(f.ctx, "ghost")
-	is.True(err != nil)
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
 
 	// A smart client still gets the advertisement.
-	is.Equal(f.do(http.MethodGet, "/pub.git/info/refs?service=git-upload-pack", "").Code, http.StatusOK)
+	if got := f.do(http.MethodGet, "/pub.git/info/refs?service=git-upload-pack", "").Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, \"/pub.git/info/refs?service=git-upload-pack\", \"\").Code = %v, want %v", got, http.StatusOK)
+	}
 }
 
 // TestDumbCloneFails checks a client forced to the dumb protocol is told why
@@ -611,14 +739,19 @@ func TestDumbCloneFails(t *testing.T) {
 // refusal.
 func TestGoGetPathEndingInDumbFile(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	_, err := f.be.CreateRepository(f.ctx, "group/HEAD", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = f.be.CreateRepository(f.ctx, "deep/info/refs", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct{ path, repo string }{
 		{"/group/HEAD?go-get=1", "group/HEAD"},
@@ -628,19 +761,35 @@ func TestGoGetPathEndingInDumbFile(t *testing.T) {
 		{"/deep/info/refs?go-get=1", "deep/info/refs"}, // a repository "info/refs"
 	} {
 		w := f.do(http.MethodGet, tc.path, "")
-		is.Equal(w.Code, http.StatusOK) // go get page
-		is.True(strings.Contains(w.Body.String(), `name="go-import"`))
-		is.True(strings.Contains(w.Body.String(), "/"+tc.repo+" git "))
+		if got := w.Code; got != http.StatusOK {
+			t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+		} // go get page
+		if !strings.Contains(w.Body.String(), `name="go-import"`) {
+			t.Fatal("not true: strings.Contains(w.Body.String(), `name=\"go-import\"`)")
+		}
+		if !strings.Contains(w.Body.String(), "/"+tc.repo+" git ") {
+			t.Fatal("not true: strings.Contains(w.Body.String(), \"/\"+tc.repo+\" git \")")
+		}
 	}
 
 	// Without go-get=1, and with another method, it is still refused.
-	is.Equal(f.do(http.MethodGet, "/group/HEAD", "").Code, http.StatusForbidden)
-	is.Equal(f.do(http.MethodGet, "/pub/info/refs", "").Code, http.StatusForbidden)
+	if got := f.do(http.MethodGet, "/group/HEAD", "").Code; got != http.StatusForbidden {
+		t.Fatalf("f.do(http.MethodGet, \"/group/HEAD\", \"\").Code = %v, want %v", got, http.StatusForbidden)
+	}
+	if got := f.do(http.MethodGet, "/pub/info/refs", "").Code; got != http.StatusForbidden {
+		t.Fatalf("f.do(http.MethodGet, \"/pub/info/refs\", \"\").Code = %v, want %v", got, http.StatusForbidden)
+	}
 	// A smart ref advertisement is still one, go-get=1 or not.
-	is.Equal(f.do(http.MethodGet, "/pub/info/refs?service=git-upload-pack&go-get=1", "").Code, http.StatusOK)
+	if got := f.do(http.MethodGet, "/pub/info/refs?service=git-upload-pack&go-get=1", "").Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, \"/pub/info/refs?service=git-upload-pack&go-get=1\", \"\").Code = %v, want %v", got, http.StatusOK)
+	}
 	w := f.do(http.MethodPost, "/group/HEAD?go-get=1", "")
-	is.Equal(w.Code, http.StatusMethodNotAllowed)
-	is.Equal(w.Header().Get("Allow"), "GET, HEAD")
+	if got := w.Code; got != http.StatusMethodNotAllowed {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusMethodNotAllowed)
+	}
+	if got := w.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Fatalf("w.Header().Get(\"Allow\") = %v, want %v", got, "GET, HEAD")
+	}
 }
 
 // gzipRPC sends a service RPC whose body is sent with Content-Encoding: gzip.
@@ -660,32 +809,53 @@ func (f *oracleFixture) gzipRPC(t *testing.T, name, service, auth string, body [
 // that sent such a body failed, so a repository it created is removed.
 func TestServiceRPCBadGzip(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
 	ownerCtx := proto.WithUserContext(f.ctx, f.owner)
 	_, err := f.be.CreateRepository(ownerCtx, "public", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	w := f.gzipRPC(t, "public", "git-upload-pack", auth, []byte("not gzip"))
-	is.Equal(w.Code, http.StatusBadRequest)
-	is.True(!strings.Contains(w.Header().Get("Content-Type"), "result"))
+	if got := w.Code; got != http.StatusBadRequest {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusBadRequest)
+	}
+	if strings.Contains(w.Header().Get("Content-Type"), "result") {
+		t.Fatal("not true: !strings.Contains(w.Header().Get(\"Content-Type\"), \"result\")")
+	}
 
-	is.Equal(f.do(http.MethodGet, "/created.git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
-	is.True(f.exists("created"))
+	if got := f.do(http.MethodGet, "/created.git/info/refs?service=git-receive-pack", auth).Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, \"/created.git/info/refs?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusOK)
+	}
+	if !f.exists("created") {
+		t.Fatal("not true: f.exists(\"created\")")
+	}
 	w = f.gzipRPC(t, "created", "git-receive-pack", auth, []byte("not gzip"))
-	is.Equal(w.Code, http.StatusBadRequest)
-	is.True(!f.exists("created"))
+	if got := w.Code; got != http.StatusBadRequest {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusBadRequest)
+	}
+	if f.exists("created") {
+		t.Fatal("not true: !f.exists(\"created\")")
+	}
 
 	// A well-formed gzip body is still served.
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	_, err = zw.Write([]byte("0000"))
-	is.NoErr(err)
-	is.NoErr(zw.Close())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	w = f.gzipRPC(t, "public", "git-upload-pack", auth, buf.Bytes())
-	is.Equal(w.Code, http.StatusOK)
-	is.Equal(w.Header().Get("Content-Type"), "application/x-git-upload-pack-result")
+	if got := w.Code; got != http.StatusOK {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/x-git-upload-pack-result" {
+		t.Fatalf("w.Header().Get(\"Content-Type\") = %v, want %v", got, "application/x-git-upload-pack-result")
+	}
 }
 
 // httpGitCounts returns the HTTP fetch and push counters for repo. The
@@ -699,13 +869,16 @@ func httpGitCounts(repo string) (fetches, pushes float64) {
 // Fetches and pushes over HTTP are counted on their ref advertisement only:
 // neither the RPCs that follow it nor refused requests are counted.
 func TestGitHTTPCounters(t *testing.T) {
-	is := is.New(t)
 	f := newOracleFixture(t)
 	const name = "http-counted"
 	_, err := f.be.CreateRepository(f.ctx, name, f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	token, err := f.be.CreateAccessToken(f.ctx, f.owner, "t", time.Now().Add(time.Hour))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	auth := "Token " + token
 
 	rpc := func(repo, service, auth string) int {
@@ -724,23 +897,45 @@ func TestGitHTTPCounters(t *testing.T) {
 	secretFetches, _ := httpGitCounts("secret")
 
 	// A fetch advertisement and a push advertisement count once each.
-	is.Equal(f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-upload-pack", "").Code, http.StatusOK)
-	is.Equal(f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
+	if got := f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-upload-pack", "").Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, \"/\"+name+\".git/info/refs?service=git-upload-pack\", \"\").Code = %v, want %v", got, http.StatusOK)
+	}
+	if got := f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, \"/\"+name+\".git/info/refs?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusOK)
+	}
 	// The RPCs that follow an advertisement belong to the same fetch or
 	// push, like the flush-only probe git sends before a large pack.
-	is.Equal(rpc(name, "git-upload-pack", ""), http.StatusOK)
-	is.Equal(rpc(name, "git-receive-pack", auth), http.StatusOK)
+	if got := rpc(name, "git-upload-pack", ""); got != http.StatusOK {
+		t.Fatalf("rpc(name, \"git-upload-pack\", \"\") = %v, want %v", got, http.StatusOK)
+	}
+	if got := rpc(name, "git-receive-pack", auth); got != http.StatusOK {
+		t.Fatalf("rpc(name, \"git-receive-pack\", auth) = %v, want %v", got, http.StatusOK)
+	}
 	// Refused: an anonymous push, and a fetch of a private repository.
-	is.True(f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", "").Code != http.StatusOK)
-	is.True(rpc(name, "git-receive-pack", "") != http.StatusOK)
-	is.True(f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", "").Code != http.StatusOK)
-	is.True(rpc("secret", "git-upload-pack", "") != http.StatusOK)
+	if f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", "").Code == http.StatusOK {
+		t.Fatal("not true: f.do(http.MethodGet, \"/\"+name+\".git/info/refs?service=git-receive-pack\", \"\").Code != http.StatusOK")
+	}
+	if rpc(name, "git-receive-pack", "") == http.StatusOK {
+		t.Fatal("not true: rpc(name, \"git-receive-pack\", \"\") != http.StatusOK")
+	}
+	if f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", "").Code == http.StatusOK {
+		t.Fatal("not true: f.do(http.MethodGet, \"/secret.git/info/refs?service=git-upload-pack\", \"\").Code != http.StatusOK")
+	}
+	if rpc("secret", "git-upload-pack", "") == http.StatusOK {
+		t.Fatal("not true: rpc(\"secret\", \"git-upload-pack\", \"\") != http.StatusOK")
+	}
 
 	gotFetches, gotPushes := httpGitCounts(name)
-	is.Equal(gotFetches-fetches, 1.0)
-	is.Equal(gotPushes-pushes, 1.0)
+	if got := gotFetches - fetches; got != 1.0 {
+		t.Fatalf("gotFetches-fetches = %v, want %v", got, 1.0)
+	}
+	if got := gotPushes - pushes; got != 1.0 {
+		t.Fatalf("gotPushes-pushes = %v, want %v", got, 1.0)
+	}
 	gotSecret, _ := httpGitCounts("secret")
-	is.Equal(gotSecret-secretFetches, 0.0)
+	if got := gotSecret - secretFetches; got != 0.0 {
+		t.Fatalf("gotSecret-secretFetches = %v, want %v", got, 0.0)
+	}
 }
 
 // A clone or fetch by a real git client is counted once, whichever protocol
@@ -749,11 +944,12 @@ func TestGitHTTPFetchCountedOnce(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
-	is := is.New(t)
 	f := newOracleFixture(t)
 	const name = "http-fetch-counted"
 	_, err := f.be.CreateRepository(f.ctx, name, f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Give the repository a commit, so a clone fetches a pack. Its hooks run
 	// the server binary, which is the test binary here; push with no hooks.
@@ -778,9 +974,13 @@ func TestGitHTTPFetchCountedOnce(t *testing.T) {
 	for _, version := range []string{"2", "0"} {
 		dst := filepath.Join(t.TempDir(), "clone")
 		// A clone sends ls-refs and fetch in protocol v2.
-		is.Equal(counted("-c", "protocol.version="+version, "clone", "-q", repoURL, dst), 1.0)
+		if got := counted("-c", "protocol.version="+version, "clone", "-q", repoURL, dst); got != 1.0 {
+			t.Fatalf("counted(\"-c\", \"protocol.version=\"+version, \"clone\", \"-q\", repoURL, dst) = %v, want %v", got, 1.0)
+		}
 		// A fetch with nothing new sends no RPC in v0, and ls-refs in v2.
-		is.Equal(counted("-C", dst, "-c", "protocol.version="+version, "fetch", "-q", "origin"), 1.0)
+		if got := counted("-C", dst, "-c", "protocol.version="+version, "fetch", "-q", "origin"); got != 1.0 {
+			t.Fatalf("counted(\"-C\", dst, \"-c\", \"protocol.version=\"+version, \"fetch\", \"-q\", \"origin\") = %v, want %v", got, 1.0)
+		}
 	}
 }
 
@@ -791,22 +991,29 @@ func TestGitHTTPPushCountedOnce(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
-	is := is.New(t)
 	f := newOracleFixture(t)
 	const name = "http-push-counted"
 	_, err := f.be.CreateRepository(f.ctx, name, f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The repository's hooks run the server binary, which is the test binary
 	// here, and would refuse the push.
 	hooks := filepath.Join(f.env.cfg.DataPath, "repos", name+".git", "hooks")
-	is.NoErr(os.RemoveAll(hooks))
+	if err := os.RemoveAll(hooks); err != nil {
+		t.Fatal(err)
+	}
 	token, err := f.be.CreateAccessToken(f.ctx, f.owner, "t", time.Now().Add(time.Hour))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	srv := httptest.NewServer(f.handler)
 	t.Cleanup(srv.Close)
 	u, err := url.Parse(srv.URL + "/" + name + ".git")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	u.User = url.UserPassword("owner", token)
 
 	// A commit with a file that does not compress, larger than the post
@@ -815,8 +1022,12 @@ func TestGitHTTPPushCountedOnce(t *testing.T) {
 	gitRun(t, "init", "-q", work)
 	blob := make([]byte, 256<<10)
 	_, err = rand.Read(blob)
-	is.NoErr(err)
-	is.NoErr(os.WriteFile(filepath.Join(work, "blob"), blob, 0o600))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "blob"), blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	gitRun(t, "-C", work, "add", "blob")
 	gitRun(t, "-C", work, "commit", "-q", "-m", "first")
 
@@ -829,9 +1040,13 @@ func TestGitHTTPPushCountedOnce(t *testing.T) {
 		return after - before
 	}
 	push := []string{"-C", work, "-c", "http.postBuffer=65536", "push", "-q", u.String(), "HEAD:refs/heads/main"}
-	is.Equal(counted(push...), 1.0)
+	if got := counted(push...); got != 1.0 {
+		t.Fatalf("counted(push...) = %v, want %v", got, 1.0)
+	}
 	// Everything is up to date: git reads the advertisement and stops.
-	is.Equal(counted(push...), 1.0)
+	if got := counted(push...); got != 1.0 {
+		t.Fatalf("counted(push...) = %v, want %v", got, 1.0)
+	}
 }
 
 // The go get counter is labelled with the repository a request resolves to,
@@ -841,11 +1056,12 @@ func TestGitHTTPPushCountedOnce(t *testing.T) {
 // grow the metrics without bound. The fetch counter is held to the same
 // rule.
 func TestHTTPCountersLabelledByRepository(t *testing.T) {
-	is := is.New(t)
 	f := newOracleFixture(t)
 	const name = "label-counted"
 	_, err := f.be.CreateRepository(f.ctx, name, f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	goGets := []string{
 		"/" + name + "/x",
@@ -861,21 +1077,35 @@ func TestHTTPCountersLabelledByRepository(t *testing.T) {
 	series := testutil.CollectAndCount(goGetCounter)
 	for _, p := range goGets {
 		w := f.do(http.MethodGet, p+"?go-get=1", "")
-		is.Equal(w.Code, http.StatusOK)
-		is.True(strings.Contains(w.Body.String(), "/"+name+" git ")) // resolves to the repository
+		if got := w.Code; got != http.StatusOK {
+			t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+		}
+		if !strings.Contains(w.Body.String(), "/"+name+" git ") {
+			t.Fatal("not true: strings.Contains(w.Body.String(), \"/\"+name+\" git \")")
+		} // resolves to the repository
 	}
-	is.Equal(testutil.CollectAndCount(goGetCounter)-series, 0)
-	is.Equal(testutil.ToFloat64(goGetCounter.WithLabelValues(name))-count, float64(len(goGets)))
+	if got := testutil.CollectAndCount(goGetCounter) - series; got != 0 {
+		t.Fatalf("testutil.CollectAndCount(goGetCounter)-series = %v, want %v", got, 0)
+	}
+	if got, want := testutil.ToFloat64(goGetCounter.WithLabelValues(name))-count, float64(len(goGets)); got != want {
+		t.Fatalf("testutil.ToFloat64(goGetCounter.WithLabelValues(name))-count = %v, want %v", got, want)
+	}
 
 	fetches, _ := httpGitCounts(name)
 	series = testutil.CollectAndCount(gitHTTPUploadCounter)
 	refs := []string{"/" + name, "/" + name + ".git", "/" + name + ".git.git", "/" + name + "/.git"}
 	for _, p := range refs {
-		is.Equal(f.do(http.MethodGet, p+"/info/refs?service=git-upload-pack", "").Code, http.StatusOK)
+		if got := f.do(http.MethodGet, p+"/info/refs?service=git-upload-pack", "").Code; got != http.StatusOK {
+			t.Fatalf("f.do(http.MethodGet, p+\"/info/refs?service=git-upload-pack\", \"\").Code = %v, want %v", got, http.StatusOK)
+		}
 	}
-	is.Equal(testutil.CollectAndCount(gitHTTPUploadCounter)-series, 0)
+	if got := testutil.CollectAndCount(gitHTTPUploadCounter) - series; got != 0 {
+		t.Fatalf("testutil.CollectAndCount(gitHTTPUploadCounter)-series = %v, want %v", got, 0)
+	}
 	gotFetches, _ := httpGitCounts(name)
-	is.Equal(gotFetches-fetches, float64(len(refs)))
+	if got, want := gotFetches-fetches, float64(len(refs)); got != want {
+		t.Fatalf("gotFetches-fetches = %v, want %v", got, want)
+	}
 }
 
 // countingReader records how many bytes were read from the request body.
@@ -1205,13 +1435,18 @@ func TestServiceRPCKeepAlive(t *testing.T) {
 // Error bodies are plain text that a browser must not sniff into HTML.
 func TestErrorBodyIsPlainText(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	for _, path := range []string{"/nope", "/secret.git/info/refs?service=git-upload-pack"} {
 		w := f.do(http.MethodGet, path, "")
-		is.True(w.Code >= 400)
-		is.Equal(w.Header().Get("Content-Type"), "text/plain; charset=utf-8")
-		is.Equal(w.Header().Get("X-Content-Type-Options"), "nosniff")
+		if w.Code < 400 {
+			t.Fatal("not true: w.Code >= 400")
+		}
+		if got := w.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+			t.Fatalf("w.Header().Get(\"Content-Type\") = %v, want %v", got, "text/plain; charset=utf-8")
+		}
+		if got := w.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Fatalf("w.Header().Get(\"X-Content-Type-Options\") = %v, want %v", got, "nosniff")
+		}
 	}
 }
 
@@ -1220,25 +1455,30 @@ func TestErrorBodyIsPlainText(t *testing.T) {
 // 404 as if the repository were missing.
 func TestInfoRefsGitFailure(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var logs bytes.Buffer
 	logger := log.New(&logs)
 
 	env := newTestEnvLogging(t, logger)
 	ctx, be := env.ctx, env.be
 	_, err := be.CreateRepository(ctx, "broken", fixtureAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// A HEAD git cannot read makes the directory no longer a repository
 	// to git, while soft-serve still knows it.
 	dir := filepath.Join(env.cfg.DataPath, "repos", "broken.git")
-	is.NoErr(os.WriteFile(filepath.Join(dir, "HEAD"), []byte("garbage\n"), 0o600))
+	if err := os.WriteFile(filepath.Join(dir, "HEAD"), []byte("garbage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/broken.git/info/refs?service=git-upload-pack", nil)
 	w := httptest.NewRecorder()
 	env.router(t).ServeHTTP(w, req)
 
-	is.Equal(w.Code, http.StatusInternalServerError)
+	if got := w.Code; got != http.StatusInternalServerError {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusInternalServerError)
+	}
 	out := logs.String()
 	if !strings.Contains(out, "failed to advertise refs") || !strings.Contains(out, "fatal:") {
 		t.Errorf("log does not carry git's reason:\n%s", out)
@@ -1254,11 +1494,12 @@ type infoFixture struct {
 
 func newInfoFixture(t *testing.T) *infoFixture {
 	t.Helper()
-	is := is.New(t)
 	env := newTestEnv(t)
 	ctx, be := env.ctx, env.be
 	_, err := be.CreateRepository(ctx, "pub", fixtureAdmin(t, be), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := filepath.Join(env.cfg.DataPath, "repos", "pub.git")
 	return &infoFixture{handler: env.router(t), dir: dir}
 }
@@ -1296,7 +1537,9 @@ func (f *infoFixture) populate(t *testing.T) {
 	t.Helper()
 	work := t.TempDir()
 	runGit(t, work, "init", "-q", "-b", "master")
-	is.New(t).NoErr(os.WriteFile(filepath.Join(work, "a"), []byte("a"), 0o644))
+	if err := os.WriteFile(filepath.Join(work, "a"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	runGit(t, work, "add", "a")
 	runGit(t, work, "commit", "-q", "-m", "first")
 	runGit(t, work, "tag", "light")
@@ -1304,7 +1547,9 @@ func (f *infoFixture) populate(t *testing.T) {
 	runGit(t, work, "tag", "-a", "-m", "nested", "v1-nested", "v1")
 	runGit(t, work, "push", "-q", f.dir, "master", "--tags")
 	runGit(t, f.dir, "repack", "-q", "-a", "-d")
-	is.New(t).NoErr(os.WriteFile(filepath.Join(work, "b"), []byte("b"), 0o644))
+	if err := os.WriteFile(filepath.Join(work, "b"), []byte("b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	runGit(t, work, "add", "b")
 	runGit(t, work, "commit", "-q", "-m", "second")
 	runGit(t, work, "push", "-q", f.dir, "master:refs/heads/other")
@@ -1315,23 +1560,38 @@ func (f *infoFixture) populate(t *testing.T) {
 // header, the service line before protocol v2, and git's output.
 func TestSmartInfoRefs(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newInfoFixture(t)
 	f.populate(t)
 	head := strings.Fields(runGit(t, f.dir, "rev-parse", "refs/heads/master"))[0]
 
 	w := f.get(t, "/pub.git/info/refs?service=git-upload-pack")
-	is.Equal(w.Code, http.StatusOK)
-	is.Equal(w.Header().Get("Content-Type"), "application/x-git-upload-pack-advertisement")
-	is.Equal(w.Header().Get("Cache-Control"), "no-cache, max-age=0, must-revalidate")
+	if got := w.Code; got != http.StatusOK {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/x-git-upload-pack-advertisement" {
+		t.Fatalf("w.Header().Get(\"Content-Type\") = %v, want %v", got, "application/x-git-upload-pack-advertisement")
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-cache, max-age=0, must-revalidate" {
+		t.Fatalf("w.Header().Get(\"Cache-Control\") = %v, want %v", got, "no-cache, max-age=0, must-revalidate")
+	}
 	body := w.Body.String()
-	is.True(strings.HasPrefix(body, "001e# service=git-upload-pack\n0000"))
-	is.True(strings.Contains(body, head+" refs/heads/master"))
-	is.True(strings.HasSuffix(body, "0000"))
+	if !strings.HasPrefix(body, "001e# service=git-upload-pack\n0000") {
+		t.Fatal("not true: strings.HasPrefix(body, \"001e# service=git-upload-pack\\n0000\")")
+	}
+	if !strings.Contains(body, head+" refs/heads/master") {
+		t.Fatal("not true: strings.Contains(body, head+\" refs/heads/master\")")
+	}
+	if !strings.HasSuffix(body, "0000") {
+		t.Fatal("not true: strings.HasSuffix(body, \"0000\")")
+	}
 
 	w = f.get(t, "/pub.git/info/refs?service=git-upload-pack", "Git-Protocol", "version=2")
-	is.Equal(w.Code, http.StatusOK)
-	is.True(strings.HasPrefix(w.Body.String(), "000eversion 2\n"))
+	if got := w.Code; got != http.StatusOK {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+	}
+	if !strings.HasPrefix(w.Body.String(), "000eversion 2\n") {
+		t.Fatal("not true: strings.HasPrefix(w.Body.String(), \"000eversion 2\\n\")")
+	}
 }
 
 // TestInfoRefsServiceLineFollowsServedVersion checks the service line is
@@ -1362,24 +1622,39 @@ func TestInfoRefsServiceLineFollowsServedVersion(t *testing.T) {
 // git writes, so a git that fails silently still gets an error status.
 func TestAdvertisementStartsOnFirstWrite(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var out bytes.Buffer
 	starts := 0
 	a := &advertisement{w: &out, start: func() { starts++; out.WriteString("hdr|") }}
 
 	n, err := a.Write(nil)
-	is.NoErr(err)
-	is.Equal(n, 0)
-	is.Equal(starts, 0)
-	is.True(!a.started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := n; got != 0 {
+		t.Fatalf("n = %v, want %v", got, 0)
+	}
+	if got := starts; got != 0 {
+		t.Fatalf("starts = %v, want %v", got, 0)
+	}
+	if a.started {
+		t.Fatal("not true: !a.started")
+	}
 
 	_, err = a.Write([]byte("one|"))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = a.Write([]byte("two"))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	a.begin()
-	is.Equal(starts, 1)
-	is.Equal(out.String(), "hdr|one|two")
+	if got := starts; got != 1 {
+		t.Fatalf("starts = %v, want %v", got, 1)
+	}
+	if got := out.String(); got != "hdr|one|two" {
+		t.Fatalf("out.String() = %v, want %v", got, "hdr|one|two")
+	}
 }
 
 // duplexRecorder records whether the handler asked for full duplex.
@@ -1397,7 +1672,6 @@ func (d *duplexRecorder) EnableFullDuplex() error {
 // request while it writes the response.
 func TestServiceRPCEnablesFullDuplex(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newInfoFixture(t)
 	f.populate(t)
 
@@ -1409,9 +1683,15 @@ func TestServiceRPCEnablesFullDuplex(t *testing.T) {
 	w := &duplexRecorder{ResponseRecorder: httptest.NewRecorder()}
 	f.handler.ServeHTTP(w, req)
 
-	is.Equal(w.Code, http.StatusOK)
-	is.True(w.fullDuplex)
-	is.True(strings.Contains(w.Body.String(), "refs/heads/master"))
+	if got := w.Code; got != http.StatusOK {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+	}
+	if !w.fullDuplex {
+		t.Fatal("not true: w.fullDuplex")
+	}
+	if !strings.Contains(w.Body.String(), "refs/heads/master") {
+		t.Fatal("not true: strings.Contains(w.Body.String(), \"refs/heads/master\")")
+	}
 }
 
 // With allow-keyless off, an anonymous caller is asked for credentials on
@@ -1419,18 +1699,27 @@ func TestServiceRPCEnablesFullDuplex(t *testing.T) {
 // with a token is served.
 func TestKeylessDisabledRequiresCaller(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
-	is.NoErr(f.be.SetAllowKeyless(f.ctx, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.be.SetAllowKeyless(f.ctx, false); err != nil {
+		t.Fatal(err)
+	}
 
 	auth := "Token " + f.token
 	for _, path := range []string{"/pub.git/info/refs?service=git-upload-pack", "/pub?go-get=1"} {
 		w := f.do(http.MethodGet, path, "")
-		is.Equal(w.Code, http.StatusUnauthorized) // anonymous
-		is.True(w.Header().Get("WWW-Authenticate") != "")
-		is.Equal(f.do(http.MethodGet, path, auth).Code, http.StatusOK) // with a token
+		if got := w.Code; got != http.StatusUnauthorized {
+			t.Fatalf("w.Code = %v, want %v", got, http.StatusUnauthorized)
+		} // anonymous
+		if w.Header().Get("WWW-Authenticate") == "" {
+			t.Fatal("not true: w.Header().Get(\"WWW-Authenticate\") != \"\"")
+		}
+		if got := f.do(http.MethodGet, path, auth).Code; got != http.StatusOK {
+			t.Fatalf("f.do(http.MethodGet, path, auth).Code = %v, want %v", got, http.StatusOK)
+		} // with a token
 	}
 }
 
@@ -1440,37 +1729,62 @@ func TestKeylessDisabledRequiresCaller(t *testing.T) {
 // that turning mirroring off lets the push advertisement through again.
 func TestHTTPMirrorRefusesPush(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
 	ownerCtx := proto.WithUserContext(f.ctx, f.owner)
 
 	_, err := f.be.CreateRepository(ownerCtx, "m", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
-	is.NoErr(f.be.AddCollaborator(ownerCtx, "m", "stranger", access.ReadWriteAccess))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.be.AddCollaborator(ownerCtx, "m", "stranger", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 	r, err := git.Open(t.Context(), filepath.Join(f.env.cfg.DataPath, "repos", "m.git"))
-	is.NoErr(err)
-	is.NoErr(r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"))
-	is.NoErr(f.be.SetMirror(ownerCtx, "m", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ConfigSet("remote.origin.url", "https://1.1.1.1/x.git"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.be.SetMirror(ownerCtx, "m", true); err != nil {
+		t.Fatal(err)
+	}
 
 	want := proto.ErrMirrorReadOnly.Error()
 	adv := f.do(http.MethodGet, "/m.git/info/refs?service=git-receive-pack", auth)
-	is.Equal(adv.Code, http.StatusForbidden)
-	is.Equal(strings.TrimSpace(adv.Body.String()), want)
+	if got := adv.Code; got != http.StatusForbidden {
+		t.Fatalf("adv.Code = %v, want %v", got, http.StatusForbidden)
+	}
+	if got := strings.TrimSpace(adv.Body.String()); got != want {
+		t.Fatalf("strings.TrimSpace(adv.Body.String()) = %v, want %v", got, want)
+	}
 
 	rpc := f.do(http.MethodPost, "/m.git/git-receive-pack", auth)
-	is.Equal(rpc.Code, http.StatusForbidden)
-	is.Equal(strings.TrimSpace(rpc.Body.String()), want)
+	if got := rpc.Code; got != http.StatusForbidden {
+		t.Fatalf("rpc.Code = %v, want %v", got, http.StatusForbidden)
+	}
+	if got := strings.TrimSpace(rpc.Body.String()); got != want {
+		t.Fatalf("strings.TrimSpace(rpc.Body.String()) = %v, want %v", got, want)
+	}
 
 	// Reads are not refused.
 	up := f.do(http.MethodGet, "/m.git/info/refs?service=git-upload-pack", auth)
-	is.Equal(up.Code, http.StatusOK)
-	is.True(!strings.Contains(up.Body.String(), want))
+	if got := up.Code; got != http.StatusOK {
+		t.Fatalf("up.Code = %v, want %v", got, http.StatusOK)
+	}
+	if strings.Contains(up.Body.String(), want) {
+		t.Fatal("not true: !strings.Contains(up.Body.String(), want)")
+	}
 
 	// Without mirroring the push advertisement is served.
-	is.NoErr(f.be.SetMirror(ownerCtx, "m", false))
+	if err := f.be.SetMirror(ownerCtx, "m", false); err != nil {
+		t.Fatal(err)
+	}
 	adv = f.do(http.MethodGet, "/m.git/info/refs?service=git-receive-pack", auth)
-	is.Equal(adv.Code, http.StatusOK)
+	if got := adv.Code; got != http.StatusOK {
+		t.Fatalf("adv.Code = %v, want %v", got, http.StatusOK)
+	}
 }
 
 // oracleFixture wires a router with a private repository owned by "owner"
@@ -1497,7 +1811,6 @@ func newOracleFixture(t *testing.T) *oracleFixture {
 // newOracleFixtureLogging returns a fixture whose server logs on logger.
 func newOracleFixtureLogging(t *testing.T, logger *log.Logger) *oracleFixture {
 	t.Helper()
-	is := is.New(t)
 	env := newTestEnvLogging(t, logger)
 	ctx, be := env.ctx, env.be
 
@@ -1506,14 +1819,22 @@ func newOracleFixtureLogging(t *testing.T, logger *log.Logger) *oracleFixture {
 	env.writeHostKey(t)
 
 	owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "secret", owner, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	stranger, err := be.CreateUser(ctx, "stranger", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	token, err := be.CreateAccessToken(ctx, stranger, "t", time.Now().Add(time.Hour))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	s := env.server(t)
 	return &oracleFixture{env: env, ctx: ctx, owner: owner, be: be, handler: s.router(), token: token, server: s, pending: s.pending}
@@ -1551,11 +1872,14 @@ func answerOf(w *httptest.ResponseRecorder) answer {
 // for a missing one and checks the caller cannot tell them apart.
 func (f *oracleFixture) assertSameAnswer(t *testing.T, method, path, auth string, wantCode int) {
 	t.Helper()
-	is := is.New(t)
 	private := answerOf(f.do(method, fmt.Sprintf(path, "secret"), auth))
 	missing := answerOf(f.do(method, fmt.Sprintf(path, "ghost"), auth))
-	is.Equal(private.code, wantCode)
-	is.Equal(missing, private)
+	if got := private.code; got != wantCode {
+		t.Fatalf("private.code = %v, want %v", got, wantCode)
+	}
+	if got, want := missing, private; !reflect.DeepEqual(got, want) {
+		t.Fatalf("missing = %v, want %v", got, want)
+	}
 }
 
 // TestReceivePackDoesNotRevealPrivateRepositories covers the push paths,
@@ -1563,7 +1887,6 @@ func (f *oracleFixture) assertSameAnswer(t *testing.T, method, path, auth string
 // same signed-in user.
 func TestReceivePackDoesNotRevealPrivateRepositories(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
 
@@ -1584,45 +1907,72 @@ func TestReceivePackDoesNotRevealPrivateRepositories(t *testing.T) {
 
 	// Nothing above created a repository.
 	_, err := f.be.Repository(f.ctx, "ghost")
-	is.True(err != nil)
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
 
 	// A signed-in user's push to a private repository they cannot read is
 	// a 404, the same as every other unreadable repository, while a push
 	// to a new name still creates it.
-	is.Equal(f.do(http.MethodGet, "/secret.git/info/refs?service=git-receive-pack", auth).Code, http.StatusNotFound)
-	is.Equal(f.do(http.MethodPost, "/secret.git/git-receive-pack", auth).Code, http.StatusNotFound)
-	is.Equal(f.do(http.MethodGet, "/ghost.git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
+	if got := f.do(http.MethodGet, "/secret.git/info/refs?service=git-receive-pack", auth).Code; got != http.StatusNotFound {
+		t.Fatalf("f.do(http.MethodGet, \"/secret.git/info/refs?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusNotFound)
+	}
+	if got := f.do(http.MethodPost, "/secret.git/git-receive-pack", auth).Code; got != http.StatusNotFound {
+		t.Fatalf("f.do(http.MethodPost, \"/secret.git/git-receive-pack\", auth).Code = %v, want %v", got, http.StatusNotFound)
+	}
+	if got := f.do(http.MethodGet, "/ghost.git/info/refs?service=git-receive-pack", auth).Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, \"/ghost.git/info/refs?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusOK)
+	}
 	_, err = f.be.Repository(f.ctx, "ghost")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// With admin-only creation on, a non-admin's push to a new name is
 	// refused like any other unreadable repository and creates nothing.
 	f.env.cfg.AdminOnlyCreate = true
-	is.Equal(f.do(http.MethodGet, "/ghost2.git/info/refs?service=git-receive-pack", auth).Code, http.StatusNotFound)
-	is.Equal(f.do(http.MethodPost, "/ghost2.git/git-receive-pack", auth).Code, http.StatusNotFound)
+	if got := f.do(http.MethodGet, "/ghost2.git/info/refs?service=git-receive-pack", auth).Code; got != http.StatusNotFound {
+		t.Fatalf("f.do(http.MethodGet, \"/ghost2.git/info/refs?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusNotFound)
+	}
+	if got := f.do(http.MethodPost, "/ghost2.git/git-receive-pack", auth).Code; got != http.StatusNotFound {
+		t.Fatalf("f.do(http.MethodPost, \"/ghost2.git/git-receive-pack\", auth).Code = %v, want %v", got, http.StatusNotFound)
+	}
 	_, err = f.be.Repository(f.ctx, "ghost2")
-	is.True(err != nil)
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
 }
 
 // TestReceivePackReaderIsForbidden verifies a caller who can read but not
 // write is told so rather than being treated as unable to see the repo.
 func TestReceivePackReaderIsForbidden(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	ownerCtx := proto.WithUserContext(f.ctx, f.owner)
-	is.NoErr(f.be.AddCollaborator(ownerCtx, "secret", "stranger", access.ReadOnlyAccess))
+	if err := f.be.AddCollaborator(ownerCtx, "secret", "stranger", access.ReadOnlyAccess); err != nil {
+		t.Fatal(err)
+	}
 
 	auth := "Token " + f.token
-	is.Equal(f.do(http.MethodGet, "/secret.git/info/refs?service=git-receive-pack", auth).Code, http.StatusForbidden)
-	is.Equal(f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", auth).Code, http.StatusOK)
+	if got := f.do(http.MethodGet, "/secret.git/info/refs?service=git-receive-pack", auth).Code; got != http.StatusForbidden {
+		t.Fatalf("f.do(http.MethodGet, \"/secret.git/info/refs?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusForbidden)
+	}
+	if got := f.do(http.MethodGet, "/secret.git/info/refs?service=git-upload-pack", auth).Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, \"/secret.git/info/refs?service=git-upload-pack\", auth).Code = %v, want %v", got, http.StatusOK)
+	}
 
 	// The service parameter does not turn a read into a push off the
 	// advertisement.
-	is.Equal(f.do(http.MethodGet, "/secret.git/HEAD?service=git-receive-pack", auth).Code, http.StatusForbidden)
+	if got := f.do(http.MethodGet, "/secret.git/HEAD?service=git-receive-pack", auth).Code; got != http.StatusForbidden {
+		t.Fatalf("f.do(http.MethodGet, \"/secret.git/HEAD?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusForbidden)
+	}
 	want := answerOf(f.do(http.MethodGet, "/secret.git/objects/info/whatever", auth))
-	is.Equal(want.code, http.StatusNotFound)
-	is.Equal(answerOf(f.do(http.MethodGet, "/secret.git/objects/info/whatever?service=git-receive-pack", auth)), want)
+	if got := want.code; got != http.StatusNotFound {
+		t.Fatalf("want.code = %v, want %v", got, http.StatusNotFound)
+	}
+	if got, want := answerOf(f.do(http.MethodGet, "/secret.git/objects/info/whatever?service=git-receive-pack", auth)), want; !reflect.DeepEqual(got, want) {
+		t.Fatalf("answerOf(f.do(http.MethodGet, \"/secret.git/objects/info/whatever?service=git-receive-pack\", auth)) = %v, want %v", got, want)
+	}
 
 	// A GET whose path ends in the push service name is routed to the RPC
 	// handler with a nested repository name. The method is refused
@@ -1631,13 +1981,19 @@ func TestReceivePackReaderIsForbidden(t *testing.T) {
 	for _, name := range []string{"secret", "ghost"} {
 		for _, a := range []string{auth, ""} {
 			got := answerOf(f.do(http.MethodGet, "/"+name+"/objects/info/git-receive-pack", a))
-			is.Equal(got.code, http.StatusMethodNotAllowed)
+			if got := got.code; got != http.StatusMethodNotAllowed {
+				t.Fatalf("got.code = %v, want %v", got, http.StatusMethodNotAllowed)
+			}
 		}
 	}
 	_, err := f.be.Repository(f.ctx, "secret/objects/info")
-	is.True(err != nil)
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
 	_, err = f.be.Repository(f.ctx, "ghost/objects/info")
-	is.True(err != nil)
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	}
 }
 
 // mintJWT signs a token for user the way `soft jwt` does, with f's host
@@ -1652,10 +2008,11 @@ func (f *oracleFixture) mintJWT(t *testing.T, user proto.User, audience ...strin
 // so the answers do not tell the two apart.
 func TestBearerTokenDoesNotRevealPrivateRepositories(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	stranger, err := f.be.User(f.ctx, "stranger")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	const path = "/%s.git/info/refs?service=git-upload-pack"
 	mint := func(audience ...string) string {
@@ -1665,17 +2022,25 @@ func TestBearerTokenDoesNotRevealPrivateRepositories(t *testing.T) {
 	// A token whose audience names the requested repository identifies the
 	// user whether or not the repository exists.
 	for _, name := range []string{"secret", "ghost"} {
-		is.Equal(answerOf(f.do(http.MethodGet, fmt.Sprintf(path, name), mint(name))).code, http.StatusNotFound)
+		if got := answerOf(f.do(http.MethodGet, fmt.Sprintf(path, name), mint(name))).code; got != http.StatusNotFound {
+			t.Fatalf("answerOf(f.do(http.MethodGet, fmt.Sprintf(path, name), mint(name))).code = %v, want %v", got, http.StatusNotFound)
+		}
 	}
 	private := answerOf(f.do(http.MethodGet, fmt.Sprintf(path, "secret"), mint("secret")))
 	missing := answerOf(f.do(http.MethodGet, fmt.Sprintf(path, "ghost"), mint("ghost")))
-	is.Equal(missing, private)
+	if got, want := missing, private; !reflect.DeepEqual(got, want) {
+		t.Fatalf("missing = %v, want %v", got, want)
+	}
 
 	// The same holds when the token names several repositories.
 	private = answerOf(f.do(http.MethodGet, fmt.Sprintf(path, "secret"), mint("a", "secret", "b")))
 	missing = answerOf(f.do(http.MethodGet, fmt.Sprintf(path, "ghost"), mint("a", "ghost", "b")))
-	is.Equal(private.code, http.StatusNotFound)
-	is.Equal(missing, private)
+	if got := private.code; got != http.StatusNotFound {
+		t.Fatalf("private.code = %v, want %v", got, http.StatusNotFound)
+	}
+	if got, want := missing, private; !reflect.DeepEqual(got, want) {
+		t.Fatalf("missing = %v, want %v", got, want)
+	}
 
 	// A token minted for some other repository, or for none, is bad
 	// credentials either way.
@@ -1685,12 +2050,18 @@ func TestBearerTokenDoesNotRevealPrivateRepositories(t *testing.T) {
 
 	// A valid token still grants the user their own access.
 	ownerCtx := proto.WithUserContext(f.ctx, f.owner)
-	is.NoErr(f.be.AddCollaborator(ownerCtx, "secret", "stranger", access.ReadOnlyAccess))
-	is.Equal(f.do(http.MethodGet, fmt.Sprintf(path, "secret"), mint("secret")).Code, http.StatusOK)
+	if err := f.be.AddCollaborator(ownerCtx, "secret", "stranger", access.ReadOnlyAccess); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.do(http.MethodGet, fmt.Sprintf(path, "secret"), mint("secret")).Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, fmt.Sprintf(path, \"secret\"), mint(\"secret\")).Code = %v, want %v", got, http.StatusOK)
+	}
 
 	// The audience is matched against the sanitized name, which is what
 	// `soft jwt` mints, so a ".git" suffix in the token does not match.
-	is.Equal(f.do(http.MethodGet, fmt.Sprintf(path, "secret"), mint("secret.git")).Code, http.StatusForbidden)
+	if got := f.do(http.MethodGet, fmt.Sprintf(path, "secret"), mint("secret.git")).Code; got != http.StatusForbidden {
+		t.Fatalf("f.do(http.MethodGet, fmt.Sprintf(path, \"secret\"), mint(\"secret.git\")).Code = %v, want %v", got, http.StatusForbidden)
+	}
 }
 
 // commitInRepo writes a commit into the bare repository at dir, without a
@@ -1724,19 +2095,24 @@ func commitInRepo(t *testing.T, dir string) string {
 // post-receive hook does, and returns context.Canceled.
 func TestPushAfterClientWentAwayStillRunsAfterPush(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	// The fixture's token is the stranger's, so the stranger owns it.
 	stranger, err := f.be.User(f.ctx, "stranger")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = f.be.CreateRepository(proto.WithUserContext(f.ctx, stranger), "public", stranger, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := f.env.cfg
 	dir := hooks.RepoPath(cfg, "public")
 	commit := commitInRepo(t, dir)
 	lastModified := filepath.Join(dir, "info", "last-modified")
 	_, err = os.Stat(lastModified)
-	is.True(os.IsNotExist(err))
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	}
 
 	var refsFile string
 	orig := f.server.runService
@@ -1771,13 +2147,19 @@ func TestPushAfterClientWentAwayStillRunsAfterPush(t *testing.T) {
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, req)
 
-	is.True(refsFile != "")
+	if refsFile == "" {
+		t.Fatal("not true: refsFile != \"\"")
+	}
 	// AfterPush ran: it wrote last-modified before the handler returned.
 	_, err = os.Stat(lastModified)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// And the refs file is gone.
 	_, err = os.Stat(refsFile)
-	is.True(os.IsNotExist(err))
+	if !os.IsNotExist(err) {
+		t.Fatal("not true: os.IsNotExist(err)")
+	}
 }
 
 // routeNeed is what a git or LFS route asks of a caller for one method.
@@ -1817,22 +2199,29 @@ type routeWant struct {
 func TestRouteAccessTable(t *testing.T) {
 	t.Parallel()
 	f := newOracleFixture(t)
-	is := is.New(t)
 
 	// "pub" is public: anonymous callers and "stranger" may read it, and
 	// only its owner may write. "secret" is private to its owner.
 	_, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ownerCtx := proto.WithUserContext(f.ctx, f.owner)
-	is.NoErr(f.be.AddCollaborator(ownerCtx, "pub", "stranger", access.ReadOnlyAccess))
+	if err := f.be.AddCollaborator(ownerCtx, "pub", "stranger", access.ReadOnlyAccess); err != nil {
+		t.Fatal(err)
+	}
 	writer := f.ownerAuth(t)
 	reader := "Token " + f.token
 	// A user who may create repositories, and can read nothing of the
 	// owner's.
 	creator, err := f.be.CreateUser(f.ctx, "creator", proto.UserOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	creatorToken, err := f.be.CreateAccessToken(f.ctx, creator, "c", time.Now().Add(time.Hour))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	oid := strings.Repeat("a", 64)
 	read := routeWant{need: needRead}
@@ -1956,12 +2345,15 @@ func TestRouteAccessTable(t *testing.T) {
 func TestRouteAccessAnonymousWriter(t *testing.T) {
 	t.Parallel()
 	f := newOracleFixture(t)
-	is := is.New(t)
 	pub, err := f.be.CreateRepository(f.ctx, "pub", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// A lock of the owner's, which verify lists for others as theirs.
 	_, err = f.env.datastore.CreateLFSLockForUser(f.ctx, f.env.dbx, pub.ID(), f.owner.ID(), "owned.bin", "refs/heads/main")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	oid := sha256Hex("x")
 	lfsJSON := map[string]string{"Accept": lfs.MediaType, "Content-Type": lfs.MediaType}
@@ -1995,7 +2387,9 @@ func TestRouteAccessAnonymousWriter(t *testing.T) {
 
 	// anon-access read-only: authorization refuses each, asking for
 	// credentials.
-	is.NoErr(f.be.SetAnonAccess(f.ctx, access.ReadOnlyAccess))
+	if err := f.be.SetAnonAccess(f.ctx, access.ReadOnlyAccess); err != nil {
+		t.Fatal(err)
+	}
 	for _, row := range rows {
 		w := do(row.method, row.path, row.hdr, row.body)
 		if w.Code != http.StatusUnauthorized || w.Header().Get("WWW-Authenticate") == "" {
@@ -2003,7 +2397,9 @@ func TestRouteAccessAnonymousWriter(t *testing.T) {
 		}
 	}
 
-	is.NoErr(f.be.SetAnonAccess(f.ctx, access.ReadWriteAccess))
+	if err := f.be.SetAnonAccess(f.ctx, access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 	for _, row := range rows {
 		w := do(row.method, row.path, row.hdr, row.body)
 		if w.Code != row.want || (w.Header().Get("WWW-Authenticate") != "") != row.challenge {
@@ -2014,11 +2410,23 @@ func TestRouteAccessAnonymousWriter(t *testing.T) {
 
 	// The anonymous writer owns no lock: the owner's comes back as theirs.
 	w := do(http.MethodPost, "/info/lfs/locks/verify", lfsJSON, `{}`)
-	is.Equal(w.Code, http.StatusOK)
+	if got := w.Code; got != http.StatusOK {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusOK)
+	}
 	var verify lfs.LockVerifyResponse
-	is.NoErr(json.Unmarshal(w.Body.Bytes(), &verify))
-	is.Equal(len(verify.Ours), 0)
-	is.Equal(len(verify.Theirs), 1)
-	is.Equal(verify.Theirs[0].Path, "owned.bin")
-	is.Equal(verify.Theirs[0].Owner.Name, f.owner.Username())
+	if err := json.Unmarshal(w.Body.Bytes(), &verify); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(verify.Ours); got != 0 {
+		t.Fatalf("len(verify.Ours) = %v, want %v", got, 0)
+	}
+	if got := len(verify.Theirs); got != 1 {
+		t.Fatalf("len(verify.Theirs) = %v, want %v", got, 1)
+	}
+	if got := verify.Theirs[0].Path; got != "owned.bin" {
+		t.Fatalf("verify.Theirs[0].Path = %v, want %v", got, "owned.bin")
+	}
+	if got, want := verify.Theirs[0].Owner.Name, f.owner.Username(); got != want {
+		t.Fatalf("verify.Theirs[0].Owner.Name = %v, want %v", got, want)
+	}
 }

@@ -20,7 +20,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/store"
 	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/google/uuid"
-	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -65,10 +64,11 @@ const testVersion = "1.2.3-test"
 // package's tests cannot import.
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
-	is := is.New(t)
 
 	dbx, dataSource, err := dbtest.OpenSource(context.Background(), t)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := config.DefaultConfig()
 	cfg.DataPath = t.TempDir()
 	cfg.DB.Driver = dbx.DriverName()
@@ -83,15 +83,20 @@ func newTestEnv(t *testing.T) *testEnv {
 // newTestEnvOn migrates dbx and fills it with the rows of a testEnv.
 func newTestEnvOn(t *testing.T, cfg *config.Config, dbx *db.DB) *testEnv {
 	t.Helper()
-	is := is.New(t)
 	ctx := context.Background()
 
-	is.NoErr(migrate.Migrate(ctx, dbx, cfg, nil))
+	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
+		t.Fatal(err)
+	}
 	ds := database.New(nil)
 
-	is.NoErr(ds.CreateUser(ctx, dbx, "alice", false, nil))
+	if err := ds.CreateUser(ctx, dbx, "alice", false, nil); err != nil {
+		t.Fatal(err)
+	}
 	owner, err := ds.FindUserByUsername(ctx, dbx, "alice")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := ds.CreateRepo(ctx, dbx, models.Repo{
 		Name:        "repo",
@@ -102,7 +107,9 @@ func newTestEnvOn(t *testing.T, cfg *config.Config, dbx *db.DB) *testEnv {
 		t.Fatal(err)
 	}
 	repo, err := ds.GetRepoByName(ctx, dbx, "repo")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	return &testEnv{ctx: ctx, dbx: dbx, ds: ds, cfg: cfg, s: NewSender(cfg, dbx, ds, nil), owner: owner, repo: repo}
 }
@@ -111,25 +118,31 @@ func newTestEnvOn(t *testing.T, cfg *config.Config, dbx *db.DB) *testEnv {
 // given events, and returns it as the models.Webhook the sender uses.
 func (e *testEnv) newWebhook(t *testing.T, url, secret string, contentType ContentType, events ...Event) models.Webhook {
 	t.Helper()
-	is := is.New(t)
 	ids := make([]int, len(events))
 	for i, ev := range events {
 		ids[i] = int(ev)
 	}
 	id, err := e.ds.CreateWebhook(e.ctx, e.dbx, models.Webhook{RepoID: e.repo.ID, URL: url, Secret: secret, ContentType: int(contentType), Active: true})
-	is.NoErr(err)
-	is.NoErr(e.ds.CreateWebhookEvents(e.ctx, e.dbx, id, ids))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ds.CreateWebhookEvents(e.ctx, e.dbx, id, ids); err != nil {
+		t.Fatal(err)
+	}
 	w, err := e.ds.GetWebhookByID(e.ctx, e.dbx, e.repo.ID, id)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return w
 }
 
 // deliveries returns every recorded delivery for a webhook.
 func (e *testEnv) deliveries(t *testing.T, webhookID int64) []models.WebhookDelivery {
 	t.Helper()
-	is := is.New(t)
 	var ds []models.WebhookDelivery
-	is.NoErr(e.dbx.SelectContext(e.ctx, &ds, e.dbx.Rebind("SELECT * FROM webhook_deliveries WHERE webhook_id = ? ORDER BY seq"), webhookID))
+	if err := e.dbx.SelectContext(e.ctx, &ds, e.dbx.Rebind("SELECT * FROM webhook_deliveries WHERE webhook_id = ? ORDER BY seq"), webhookID); err != nil {
+		t.Fatal(err)
+	}
 	return ds
 }
 
@@ -212,10 +225,11 @@ var (
 // main, and returns its path and the commit hash of the tip.
 func gitRepo(t *testing.T) (string, string) {
 	t.Helper()
-	is := is.New(t)
 	dir := filepath.Join(t.TempDir(), "repo.git")
 	_, err := git.Init(t.Context(), dir, true)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	work := t.TempDir()
 	runGit(t, work, "init", "-q", "-b", "main")
 	runGit(t, work, "-c", "user.name=Alice", "-c", "user.email=alice@example.com",
@@ -235,10 +249,11 @@ func runGit(t *testing.T, dir string, args ...string) {
 
 func gitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	is := is.New(t)
 	cmd := exec.Command("git", args...) //nolint:noctx
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return strings.TrimSpace(string(out))
 }

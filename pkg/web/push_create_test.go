@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/gorilla/mux"
-	"github.com/matryer/is"
 )
 
 // push sends a receive-pack RPC with body and returns the status code.
@@ -118,24 +117,33 @@ func (f *oracleFixture) wantArmed(t *testing.T, name string, want bool) {
 // failing, such as the probe git sends before a large pack.
 func TestHTTPPushCreateCleanup(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
 	// advertise sends the ref advertisement that creates name, which arms
 	// its removal timer.
 	advertise := func(name string) {
 		t.Helper()
-		is.Equal(f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
-		is.True(f.exists(name))
+		if got := f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code; got != http.StatusOK {
+			t.Fatalf("f.do(http.MethodGet, \"/\"+name+\".git/info/refs?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusOK)
+		}
+		if !f.exists(name) {
+			t.Fatal("not true: f.exists(name)")
+		}
 		f.wantArmed(t, name, true)
 	}
 
 	// The push fails: the repository is removed at once.
 	advertise("failed")
-	is.Equal(f.push(t, "failed", auth, "garbage"), http.StatusOK)
-	is.True(!f.exists("failed"))
+	if got := f.push(t, "failed", auth, "garbage"); got != http.StatusOK {
+		t.Fatalf("f.push(t, \"failed\", auth, \"garbage\") = %v, want %v", got, http.StatusOK)
+	}
+	if f.exists("failed") {
+		t.Fatal("not true: !f.exists(\"failed\")")
+	}
 	listed, _ := f.pendingState("failed")
-	is.True(!listed)
+	if listed {
+		t.Fatal("not true: !listed")
+	}
 
 	// A push that updates no ref and does not fail, like git's probe
 	// before a pack larger than http.postBuffer, keeps the repository for
@@ -148,25 +156,35 @@ func TestHTTPPushCreateCleanup(t *testing.T) {
 	// on the advertisement's own timer and generation.
 	advertise("probed")
 	adPC, adGen, adTimer := f.pendingEntry(t, "probed")
-	is.Equal(f.push(t, "probed", auth, "0000"), http.StatusOK)
+	if got := f.push(t, "probed", auth, "0000"); got != http.StatusOK {
+		t.Fatalf("f.push(t, \"probed\", auth, \"0000\") = %v, want %v", got, http.StatusOK)
+	}
 	if adTimer.Stop() {
 		t.Fatal("the advertisement's removal timer was still armed after the probe")
 	}
 	f.pending.remove("probed", adPC, adGen)
-	is.True(f.exists("probed"))
+	if !f.exists("probed") {
+		t.Fatal("not true: f.exists(\"probed\")")
+	}
 	listed, _ = f.pendingState("probed")
-	is.True(listed)
+	if !listed {
+		t.Fatal("not true: listed")
+	}
 	f.wantArmed(t, "probed", true)
 	f.fireTimer(t, "probed")
 	f.waitUnlisted(t, "probed")
-	is.True(!f.exists("probed"))
+	if f.exists("probed") {
+		t.Fatal("not true: !f.exists(\"probed\")")
+	}
 
 	// The push never arrives: the repository goes when the timer the
 	// advertisement armed fires.
 	advertise("abandoned")
 	f.fireTimer(t, "abandoned")
 	f.waitUnlisted(t, "abandoned")
-	is.True(!f.exists("abandoned"))
+	if f.exists("abandoned") {
+		t.Fatal("not true: !f.exists(\"abandoned\")")
+	}
 
 	// A repository that got refs is kept, even after a failed push. The
 	// refs are written here outside any request. Once a request to it has
@@ -180,11 +198,17 @@ func TestHTTPPushCreateCleanup(t *testing.T) {
 	gitRun(t, "-C", work, "commit", "-q", "--allow-empty", "-m", "first")
 	dir := filepath.Join(f.env.cfg.DataPath, "repos", "kept.git")
 	gitRun(t, "-C", dir, "fetch", "-q", work, "master:refs/heads/master")
-	is.Equal(f.push(t, "kept", auth, "garbage"), http.StatusOK)
+	if got := f.push(t, "kept", auth, "garbage"); got != http.StatusOK {
+		t.Fatalf("f.push(t, \"kept\", auth, \"garbage\") = %v, want %v", got, http.StatusOK)
+	}
 	listed, _ = f.pendingState("kept")
-	is.True(!listed)
+	if listed {
+		t.Fatal("not true: !listed")
+	}
 	f.pending.remove("kept", adPC, adGen)
-	is.True(f.exists("kept"))
+	if !f.exists("kept") {
+		t.Fatal("not true: f.exists(\"kept\")")
+	}
 
 	// The timer finds the refs too: a repository whose refs were written
 	// with no request to it after the advertisement is kept when the
@@ -194,28 +218,43 @@ func TestHTTPPushCreateCleanup(t *testing.T) {
 	gitRun(t, "-C", dir, "fetch", "-q", work, "master:refs/heads/master")
 	f.fireTimer(t, "refs-only")
 	f.waitUnlisted(t, "refs-only")
-	is.True(f.exists("refs-only"))
+	if !f.exists("refs-only") {
+		t.Fatal("not true: f.exists(\"refs-only\")")
+	}
 }
 
 // A repository created by an HTTP push and renamed before its push fails
 // leaves another, empty repository created under its old name alone.
 func TestHTTPPushCreateCleanupChecksID(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
 	ownerCtx := proto.WithUserContext(f.ctx, f.owner)
 
-	is.Equal(f.do(http.MethodGet, "/name.git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
-	is.NoErr(f.be.RenameRepository(ownerCtx, "name", "moved"))
+	if got := f.do(http.MethodGet, "/name.git/info/refs?service=git-receive-pack", auth).Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, \"/name.git/info/refs?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusOK)
+	}
+	if err := f.be.RenameRepository(ownerCtx, "name", "moved"); err != nil {
+		t.Fatal(err)
+	}
 	_, err := f.be.CreateRepository(ownerCtx, "name", f.owner, proto.RepositoryOptions{})
-	is.NoErr(err)
-	is.NoErr(f.be.AddCollaborator(ownerCtx, "name", "stranger", access.ReadWriteAccess))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.be.AddCollaborator(ownerCtx, "name", "stranger", access.ReadWriteAccess); err != nil {
+		t.Fatal(err)
+	}
 
 	// The failed push reaches the new repository under the listed name.
-	is.Equal(f.push(t, "name", auth, "garbage"), http.StatusOK)
-	is.True(f.exists("name"))
-	is.True(f.exists("moved"))
+	if got := f.push(t, "name", auth, "garbage"); got != http.StatusOK {
+		t.Fatalf("f.push(t, \"name\", auth, \"garbage\") = %v, want %v", got, http.StatusOK)
+	}
+	if !f.exists("name") {
+		t.Fatal("not true: f.exists(\"name\")")
+	}
+	if !f.exists("moved") {
+		t.Fatal("not true: f.exists(\"moved\")")
+	}
 }
 
 // A repository created by an HTTP push is kept when its push fails if
@@ -223,20 +262,35 @@ func TestHTTPPushCreateCleanupChecksID(t *testing.T) {
 // changing its description: removing it would lose that work.
 func TestHTTPPushCreateCleanupKeepsUsed(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
 	ownerCtx := proto.WithUserContext(f.ctx, f.owner)
 
-	is.Equal(f.do(http.MethodGet, "/collab.git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
-	is.NoErr(f.be.AddCollaborator(ownerCtx, "collab", "owner", access.ReadOnlyAccess))
-	is.Equal(f.push(t, "collab", auth, "garbage"), http.StatusOK)
-	is.True(f.exists("collab"))
+	if got := f.do(http.MethodGet, "/collab.git/info/refs?service=git-receive-pack", auth).Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, \"/collab.git/info/refs?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusOK)
+	}
+	if err := f.be.AddCollaborator(ownerCtx, "collab", "owner", access.ReadOnlyAccess); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.push(t, "collab", auth, "garbage"); got != http.StatusOK {
+		t.Fatalf("f.push(t, \"collab\", auth, \"garbage\") = %v, want %v", got, http.StatusOK)
+	}
+	if !f.exists("collab") {
+		t.Fatal("not true: f.exists(\"collab\")")
+	}
 
-	is.Equal(f.do(http.MethodGet, "/described.git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
-	is.NoErr(f.be.SetDescription(ownerCtx, "described", "about"))
-	is.Equal(f.push(t, "described", auth, "garbage"), http.StatusOK)
-	is.True(f.exists("described"))
+	if got := f.do(http.MethodGet, "/described.git/info/refs?service=git-receive-pack", auth).Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, \"/described.git/info/refs?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusOK)
+	}
+	if err := f.be.SetDescription(ownerCtx, "described", "about"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.push(t, "described", auth, "garbage"); got != http.StatusOK {
+		t.Fatalf("f.push(t, \"described\", auth, \"garbage\") = %v, want %v", got, http.StatusOK)
+	}
+	if !f.exists("described") {
+		t.Fatal("not true: f.exists(\"described\")")
+	}
 }
 
 // A push over SSH to a repository an HTTP push created, running when that
@@ -244,19 +298,28 @@ func TestHTTPPushCreateCleanupKeepsUsed(t *testing.T) {
 // refs at any moment.
 func TestHTTPPushCreateCleanupWaitsForOtherPushes(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
 
-	is.Equal(f.do(http.MethodGet, "/shared.git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
+	if got := f.do(http.MethodGet, "/shared.git/info/refs?service=git-receive-pack", auth).Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, \"/shared.git/info/refs?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusOK)
+	}
 	repo, err := f.be.Repository(f.ctx, "shared")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	done, err := f.be.BeginPush(f.ctx, repo) // as the SSH push does
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer done()
 
-	is.Equal(f.push(t, "shared", auth, "garbage"), http.StatusOK)
-	is.True(f.exists("shared"))
+	if got := f.push(t, "shared", auth, "garbage"); got != http.StatusOK {
+		t.Fatalf("f.push(t, \"shared\", auth, \"garbage\") = %v, want %v", got, http.StatusOK)
+	}
+	if !f.exists("shared") {
+		t.Fatal("not true: f.exists(\"shared\")")
+	}
 }
 
 // A request that waits for a removal of a push-created repository resolves
@@ -265,11 +328,12 @@ func TestHTTPPushCreateCleanupWaitsForOtherPushes(t *testing.T) {
 // the deleted one, and proceeds if it was kept.
 func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	ownerCtx := proto.WithUserContext(f.ctx, f.owner)
 	token, err := f.be.CreateAccessToken(f.ctx, f.owner, "t", time.Now().Add(time.Hour))
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	s := f.env.server(t)
 	pending := s.pending
@@ -310,7 +374,9 @@ func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
 		}()
 		select {
 		case got := <-waits:
-			is.Equal(got, name)
+			if got := got; got != name {
+				t.Fatalf("got = %v, want %v", got, name)
+			}
 		case <-served:
 			t.Fatalf("request for %q ended without waiting for the removal", name)
 		}
@@ -325,17 +391,35 @@ func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
 
 	// Removed: the request finds the repository gone.
 	_, err = f.be.CreateRepository(ownerCtx, "removed", f.owner, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
-	code := fetch("removed", func() { is.NoErr(f.be.DeleteRepository(ownerCtx, "removed")) })
-	is.True(reached == nil)
-	is.Equal(code, http.StatusNotFound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := fetch("removed", func() {
+		if err := f.be.DeleteRepository(ownerCtx, "removed"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if reached != nil {
+		t.Fatal("not true: reached == nil")
+	}
+	if got := code; got != http.StatusNotFound {
+		t.Fatalf("code = %v, want %v", got, http.StatusNotFound)
+	}
 
 	// Kept: the request proceeds.
 	kept, err := f.be.CreateRepository(ownerCtx, "kept", f.owner, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
-	is.Equal(fetch("kept", func() {}), http.StatusNoContent)
-	is.True(reached != nil)
-	is.Equal(reached.ID(), kept.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fetch("kept", func() {}); got != http.StatusNoContent {
+		t.Fatalf("fetch(\"kept\", func() {}) = %v, want %v", got, http.StatusNoContent)
+	}
+	if reached == nil {
+		t.Fatal("not true: reached != nil")
+	}
+	if got, want := reached.ID(), kept.ID(); got != want {
+		t.Fatalf("reached.ID() = %v, want %v", got, want)
+	}
 }
 
 // Once the list is closed, as the HTTP server does when it stops, no
@@ -344,42 +428,58 @@ func TestHTTPPushCreateWaitedRequestResolvesAgain(t *testing.T) {
 // being closed.
 func TestHTTPPushCreateCloseStopsRemovals(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
 	advertise := func(name string) {
 		t.Helper()
-		is.Equal(f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
-		is.True(f.exists(name))
+		if got := f.do(http.MethodGet, "/"+name+".git/info/refs?service=git-receive-pack", auth).Code; got != http.StatusOK {
+			t.Fatalf("f.do(http.MethodGet, \"/\"+name+\".git/info/refs?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusOK)
+		}
+		if !f.exists(name) {
+			t.Fatal("not true: f.exists(name)")
+		}
 	}
 
 	advertise("armed")
 	f.wantArmed(t, "armed", true)
 	pc, gen, _ := f.pendingEntry(t, "armed")
-	is.NoErr(f.pending.close(t.Context()))
+	if err := f.pending.close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	f.wantArmed(t, "armed", false)
 	advertise("late")
 	f.wantArmed(t, "late", false)
 	// A timer that fired as close stopped it removes nothing: run what
 	// it would have run.
 	f.pending.remove("armed", pc, gen)
-	is.True(f.exists("armed"))
-	is.True(f.exists("late"))
+	if !f.exists("armed") {
+		t.Fatal("not true: f.exists(\"armed\")")
+	}
+	if !f.exists("late") {
+		t.Fatal("not true: f.exists(\"late\")")
+	}
 }
 
 // A push to a name that is not a valid repository name is refused with
 // 400 and the reason, rather than failing as a server error.
 func TestHTTPPushCreateInvalidName(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
 
 	w := f.do(http.MethodGet, "/bad%20name.git/info/refs?service=git-receive-pack", auth)
-	is.Equal(w.Code, http.StatusBadRequest)
-	is.True(strings.Contains(w.Body.String(), "repo can only contain"))
-	is.Equal(f.push(t, "bad%20name", auth, "0000"), http.StatusBadRequest)
-	is.True(!f.exists("bad name"))
+	if got := w.Code; got != http.StatusBadRequest {
+		t.Fatalf("w.Code = %v, want %v", got, http.StatusBadRequest)
+	}
+	if !strings.Contains(w.Body.String(), "repo can only contain") {
+		t.Fatal("not true: strings.Contains(w.Body.String(), \"repo can only contain\")")
+	}
+	if got := f.push(t, "bad%20name", auth, "0000"); got != http.StatusBadRequest {
+		t.Fatalf("f.push(t, \"bad%%20name\", auth, \"0000\") = %v, want %v", got, http.StatusBadRequest)
+	}
+	if f.exists("bad name") {
+		t.Fatal("not true: !f.exists(\"bad name\")")
+	}
 }
 
 // A push to a missing name that another request creates first is
@@ -411,33 +511,39 @@ func TestHTTPPushCreateRace(t *testing.T) { //nolint:tparallel // the subtests s
 	}
 
 	t.Run("same user", func(t *testing.T) {
-		is := is.New(t)
 		createFirst("mine", stranger, false)
-		is.Equal(advertise("mine"), http.StatusOK)
+		if got := advertise("mine"); got != http.StatusOK {
+			t.Fatalf("advertise(\"mine\") = %v, want %v", got, http.StatusOK)
+		}
 		// This request did not create it, so it does not list it for
 		// removal, and no timer can remove it.
 		listed, _ := f.pendingState("mine")
-		is.True(!listed)
-		is.True(f.exists("mine"))
+		if listed {
+			t.Fatal("not true: !listed")
+		}
+		if !f.exists("mine") {
+			t.Fatal("not true: f.exists(\"mine\")")
+		}
 	})
 
 	t.Run("public repository of another user", func(t *testing.T) {
-		is := is.New(t)
 		createFirst("theirs", f.owner, false)
-		is.Equal(advertise("theirs"), http.StatusForbidden)
+		if got := advertise("theirs"); got != http.StatusForbidden {
+			t.Fatalf("advertise(\"theirs\") = %v, want %v", got, http.StatusForbidden)
+		}
 	})
 
 	t.Run("private repository of another user", func(t *testing.T) {
-		is := is.New(t)
 		createFirst("hidden", f.owner, true)
-		is.Equal(advertise("hidden"), http.StatusNotFound)
+		if got := advertise("hidden"); got != http.StatusNotFound {
+			t.Fatalf("advertise(\"hidden\") = %v, want %v", got, http.StatusNotFound)
+		}
 	})
 
 	// A creation still in progress, which has claimed the directory but
 	// not yet registered the repository, is a taken name like any other
 	// the caller cannot read.
 	t.Run("creation in progress", func(t *testing.T) {
-		is := is.New(t)
 		f.server.beforePushCreate = func() {
 			f.server.beforePushCreate = nil
 			dir := filepath.Join(f.env.cfg.DataPath, "repos", "claimed.git")
@@ -445,8 +551,12 @@ func TestHTTPPushCreateRace(t *testing.T) { //nolint:tparallel // the subtests s
 				t.Error(err)
 			}
 		}
-		is.Equal(advertise("claimed"), http.StatusNotFound)
-		is.True(!f.exists("claimed"))
+		if got := advertise("claimed"); got != http.StatusNotFound {
+			t.Fatalf("advertise(\"claimed\") = %v, want %v", got, http.StatusNotFound)
+		}
+		if f.exists("claimed") {
+			t.Fatal("not true: !f.exists(\"claimed\")")
+		}
 	})
 }
 
@@ -456,10 +566,11 @@ func TestHTTPPushCreateRace(t *testing.T) { //nolint:tparallel // the subtests s
 // not at a branch that does not exist.
 func TestHTTPPushCreateFailedPushWithRefsGetsHead(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	f := newOracleFixture(t)
 	auth := "Token " + f.token
-	is.Equal(f.do(http.MethodGet, "/pushed.git/info/refs?service=git-receive-pack", auth).Code, http.StatusOK)
+	if got := f.do(http.MethodGet, "/pushed.git/info/refs?service=git-receive-pack", auth).Code; got != http.StatusOK {
+		t.Fatalf("f.do(http.MethodGet, \"/pushed.git/info/refs?service=git-receive-pack\", auth).Code = %v, want %v", got, http.StatusOK)
+	}
 	dir := filepath.Join(f.env.cfg.DataPath, "repos", "pushed.git")
 	gitRun(t, "-C", dir, "symbolic-ref", "HEAD", "refs/heads/missing")
 	tree := gitOutput(t, "-C", dir, "mktree")
@@ -468,13 +579,21 @@ func TestHTTPPushCreateFailedPushWithRefsGetsHead(t *testing.T) {
 
 	// A receive-pack request that fails after its refs landed.
 	done, _ := f.pending.begin("pushed")
-	is.True(done != nil)
+	if done == nil {
+		t.Fatal("not true: done != nil")
+	}
 	done(true)
 
-	is.True(f.exists("pushed"))
+	if !f.exists("pushed") {
+		t.Fatal("not true: f.exists(\"pushed\")")
+	}
 	listed, _ := f.pendingState("pushed")
-	is.True(!listed)
-	is.Equal(gitOutput(t, "-C", dir, "symbolic-ref", "HEAD"), "refs/heads/feature")
+	if listed {
+		t.Fatal("not true: !listed")
+	}
+	if got := gitOutput(t, "-C", dir, "symbolic-ref", "HEAD"); got != "refs/heads/feature" {
+		t.Fatalf("gitOutput(t, \"-C\", dir, \"symbolic-ref\", \"HEAD\") = %v, want %v", got, "refs/heads/feature")
+	}
 }
 
 // gitOutput runs git and returns its trimmed output, failing the test on

@@ -24,7 +24,6 @@ import (
 	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/matryer/is"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/spf13/cobra"
@@ -41,7 +40,6 @@ const gitTestTimeout = time.Minute
 // a context to look the repository up with.
 func cancelledPushToCreate(t *testing.T, beforeCancel func(ctx context.Context, be *backend.Backend, dir string)) (context.Context, *backend.Backend) {
 	t.Helper()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
 	sessCtx, cancel := context.WithCancel(adminCtx)
@@ -75,12 +73,16 @@ func cancelledPushToCreate(t *testing.T, beforeCancel func(ctx context.Context, 
 	}()
 	select {
 	case err := <-lc:
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	case <-time.After(gitTestTimeout):
 		t.Fatal("timed out reading the advertisement")
 	}
 	_, err := be.Repository(ctx, "fresh")
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if beforeCancel != nil {
 		beforeCancel(ctx, be, filepath.Join(cmdsOf(ctx).cfg.DataPath, "repos", "fresh.git"))
@@ -94,7 +96,9 @@ func cancelledPushToCreate(t *testing.T, beforeCancel func(ctx context.Context, 
 	case <-time.After(gitTestTimeout):
 		t.Fatal("timed out waiting for receive-pack to return")
 	}
-	is.True(errors.Is(err, context.Canceled))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("not true: errors.Is(err, context.Canceled)")
+	}
 
 	return ctx, be
 }
@@ -103,13 +107,16 @@ func cancelledPushToCreate(t *testing.T, beforeCancel func(ctx context.Context, 
 // went away, must not leave the new repository behind.
 func TestCancelledPushRemovesCreatedRepository(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var dir string
 	ctx, be := cancelledPushToCreate(t, func(_ context.Context, _ *backend.Backend, d string) { dir = d })
 
 	_, err := be.Repository(ctx, "fresh")
-	is.True(err != nil)      // the created repository was removed
-	is.True(!dirExists(dir)) // and so was its directory
+	if err == nil {
+		t.Fatal("not true: err != nil")
+	} // the created repository was removed
+	if dirExists(dir) {
+		t.Fatal("not true: !dirExists(dir)")
+	} // and so was its directory
 }
 
 // receive-pack updates the refs and reports success to the client before the
@@ -119,7 +126,6 @@ func TestCancelledPushRemovesCreatedRepository(t *testing.T) {
 // finished, not at a branch that does not exist.
 func TestCancelledPushKeepsCreatedRepositoryWithRefs(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var repoDir string
 	ctx, be := cancelledPushToCreate(t, func(_ context.Context, _ *backend.Backend, dir string) {
 		repoDir = dir
@@ -131,7 +137,9 @@ func TestCancelledPushKeepsCreatedRepositoryWithRefs(t *testing.T) {
 				"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
 			)
 			out, err := cmd.Output()
-			is.NoErr(err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			return strings.TrimSpace(string(out))
 		}
 		tree := git("", "mktree")
@@ -141,11 +149,17 @@ func TestCancelledPushKeepsCreatedRepositoryWithRefs(t *testing.T) {
 	})
 
 	_, err := be.Repository(ctx, "fresh")
-	is.NoErr(err) // the repository with pushed refs was kept
+	if err != nil {
+		t.Fatal(err)
+	} // the repository with pushed refs was kept
 
 	out, err := exec.CommandContext(t.Context(), "git", "-C", repoDir, "symbolic-ref", "HEAD").Output()
-	is.NoErr(err)
-	is.Equal(strings.TrimSpace(string(out)), "refs/heads/trunk") // HEAD points at the pushed branch
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "refs/heads/trunk" {
+		t.Fatalf("strings.TrimSpace(string(out)) = %v, want %v", got, "refs/heads/trunk")
+	} // HEAD points at the pushed branch
 }
 
 // No git service adds a metric series for the repository it serves. A
@@ -156,7 +170,6 @@ func TestCancelledPushKeepsCreatedRepositoryWithRefs(t *testing.T) {
 // push asks for another name.
 func TestPushAddsNoRepositorySeries(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	cancelledPushToCreate(t, nil)
 
 	ctx, _ := newAuthTestContext(t)
@@ -168,10 +181,14 @@ func TestPushAddsNoRepositorySeries(t *testing.T) {
 	c.SetOut(io.Discard)
 	c.SetErr(io.Discard)
 	c.SetArgs([]string{refused})
-	is.True(c.ExecuteContext(ctx) != nil) // anonymous callers may not push
+	if c.ExecuteContext(ctx) == nil {
+		t.Fatal("not true: c.ExecuteContext(ctx) != nil")
+	} // anonymous callers may not push
 
 	families, err := prometheus.DefaultGatherer.Gather()
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, f := range families {
 		for _, m := range f.GetMetric() {
 			for _, l := range m.GetLabel() {
@@ -188,19 +205,24 @@ func TestPushAddsNoRepositorySeries(t *testing.T) {
 // checked for them, and they would be lost with the directory.
 func TestFailedPushKeepsCreatedRepositoryWhilePushRuns(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	var endPush func()
 	ctx, be := cancelledPushToCreate(t, func(ctx context.Context, be *backend.Backend, _ string) {
 		repo, err := be.Repository(ctx, "fresh")
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		// Another session's push to the new repository starts.
 		endPush, err = be.BeginPush(ctx, repo)
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	})
 	defer endPush()
 
 	_, err := be.Repository(ctx, "fresh")
-	is.NoErr(err) // kept: the other push is running
+	if err != nil {
+		t.Fatal(err)
+	} // kept: the other push is running
 }
 
 func dirExists(dir string) bool {
@@ -227,15 +249,18 @@ func TestGitDenyReadAdminKeyIsNotAnonymous(t *testing.T) {
 		{"admin key", context.WithValue(ctx, ssh.ContextKeyPublicKey, pub), gitserve.ErrInvalidRepo},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			is := is.New(t)
-			is.True(proto.UserFromContext(tc.ctx) == nil)
+			if proto.UserFromContext(tc.ctx) != nil {
+				t.Fatal("not true: proto.UserFromContext(tc.ctx) == nil")
+			}
 			c := cmdsOf(tc.ctx).GitUploadPackCommand()
 			c.SetIn(&bytes.Buffer{})
 			c.SetOut(&bytes.Buffer{})
 			c.SetErr(&bytes.Buffer{})
 			c.SetArgs([]string{"ghost"})
 			err := c.ExecuteContext(tc.ctx)
-			is.True(errors.Is(err, tc.want))
+			if !errors.Is(err, tc.want) {
+				t.Fatal("not true: errors.Is(err, tc.want)")
+			}
 		})
 	}
 }
@@ -265,13 +290,16 @@ func runLFSCommand(ctx context.Context, newCmd func(*Commands) *cobra.Command, s
 // went wrong" with an error logged for it. A caller that may not read the
 // repository, or that wants to upload, still gets "not authorized".
 func TestSSHLFSAuthenticateWithoutAccount(t *testing.T) {
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	owner := proto.UserFromContext(withUser(t, ctx, be, "boss", true))
 	_, err := be.CreateRepository(ctx, "pub", owner, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = be.CreateRepository(ctx, "priv", owner, proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct {
 		repo, op string
@@ -308,11 +336,12 @@ func (errWriter) Write([]byte) (int, error) { return 0, io.EOF }
 // reported as cancelled and logged at Debug, as a git service is.
 func TestSSHLFSTransferClientGone(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
 	_, err := be.CreateRepository(ctx, "shared", proto.UserFromContext(adminCtx), proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	logs, err := runLFSCommand(adminCtx, (*Commands).GitLFSTransferCommand, strings.NewReader(""), errWriter{}, "shared", "download")
 	if !errors.Is(err, context.Canceled) {
@@ -326,13 +355,14 @@ func TestSSHLFSTransferClientGone(t *testing.T) {
 // Each push over SSH is counted once, and a push that is refused is not
 // counted at all.
 func TestReceivePackCountedOnce(t *testing.T) {
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
 	readerCtx := withUser(t, ctx, be, "reader", false)
 	const name = "receive-pack-counted"
 	_, err := be.CreateRepository(ctx, name, proto.UserFromContext(adminCtx), proto.RepositoryOptions{Private: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The repository's hooks run the server binary, which is the test
 	// binary here; point git at no hooks instead.
@@ -351,7 +381,9 @@ func TestReceivePackCountedOnce(t *testing.T) {
 			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
 		)
 		out, err := cmd.Output()
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return out
 	}
 	gitCmd("", "init", "-q", "--bare")
@@ -373,11 +405,19 @@ func TestReceivePackCountedOnce(t *testing.T) {
 	}
 
 	before := testutil.ToFloat64(receivePackCounter)
-	is.NoErr(push(adminCtx, "main"))
-	is.NoErr(push(adminCtx, "other"))
-	is.True(push(readerCtx, "denied") != nil) // a user who may not write is refused
+	if err := push(adminCtx, "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := push(adminCtx, "other"); err != nil {
+		t.Fatal(err)
+	}
+	if push(readerCtx, "denied") == nil {
+		t.Fatal("not true: push(readerCtx, \"denied\") != nil")
+	} // a user who may not write is refused
 
-	is.Equal(testutil.ToFloat64(receivePackCounter)-before, 2.0)
+	if got := testutil.ToFloat64(receivePackCounter) - before; got != 2.0 {
+		t.Fatalf("testutil.ToFloat64(receivePackCounter)-before = %v, want %v", got, 2.0)
+	}
 }
 
 // A push over SSH counts as running for the removal of a repository an
@@ -385,12 +425,13 @@ func TestReceivePackCountedOnce(t *testing.T) {
 // the repository while the SSH push may write refs to it.
 func TestSSHPushHoldsOffPushCreatedRemoval(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
 	user := proto.UserFromContext(adminCtx)
 	repo, err := be.CreateRepository(ctx, "shared", user, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Stdin stays open and empty, so receive-pack waits for the client
 	// after the advertisement.
@@ -411,22 +452,36 @@ func TestSSHPushHoldsOffPushCreatedRemoval(t *testing.T) {
 		stdoutW.Close() //nolint: errcheck
 	}()
 	_, err = bufio.NewReader(stdout).ReadString('\n')
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	go io.Copy(io.Discard, stdout) //nolint: errcheck
 
 	removed, err := be.RemovePushCreatedRepository(ctx, repo)
-	is.NoErr(err)
-	is.True(!removed) // the SSH push is running
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("not true: !removed")
+	} // the SSH push is running
 
 	// The client sends no commands, and the push ends.
 	_, err = stdinW.Write([]byte("0000"))
-	is.NoErr(err)
-	is.NoErr(stdinW.Close())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stdinW.Close(); err != nil {
+		t.Fatal(err)
+	}
 	<-errc //nolint:errcheck // only that the command returned matters here
 
 	removed, err = be.RemovePushCreatedRepository(ctx, repo)
-	is.NoErr(err)
-	is.True(removed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("not true: removed")
+	}
 }
 
 // An LFS upload over SSH counts as running for that removal too: removing
@@ -434,12 +489,13 @@ func TestSSHPushHoldsOffPushCreatedRemoval(t *testing.T) {
 // file behind.
 func TestSSHLFSUploadHoldsOffPushCreatedRemoval(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
 	user := proto.UserFromContext(adminCtx)
 	repo, err := be.CreateRepository(ctx, "shared", user, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	stdin, stdinW := io.Pipe()
 	stdout, stdoutW := io.Pipe()
@@ -459,31 +515,44 @@ func TestSSHLFSUploadHoldsOffPushCreatedRemoval(t *testing.T) {
 	}()
 	// The transfer has started once it advertises its capabilities.
 	_, err = bufio.NewReader(stdout).ReadString('\n')
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	go io.Copy(io.Discard, stdout) //nolint: errcheck
 
 	removed, err := be.RemovePushCreatedRepository(ctx, repo)
-	is.NoErr(err)
-	is.True(!removed) // the LFS upload is running
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("not true: !removed")
+	} // the LFS upload is running
 
-	is.NoErr(stdinW.Close())
+	if err := stdinW.Close(); err != nil {
+		t.Fatal(err)
+	}
 	<-errc //nolint:errcheck // only that the command returned matters here
 
 	removed, err = be.RemovePushCreatedRepository(ctx, repo)
-	is.NoErr(err)
-	is.True(removed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("not true: removed")
+	}
 }
 
 // A push that finds the repository it was going to push to removed, as an
 // unused HTTP push-created repository, creates it anew, as a push to a
 // missing name does, rather than failing.
 func TestSSHPushAfterPushCreatedRemovalCreates(t *testing.T) {
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	adminCtx := withUser(t, ctx, be, "boss", true)
 	user := proto.UserFromContext(adminCtx)
 	repo, err := be.CreateRepository(ctx, "shared", user, proto.RepositoryOptions{})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The removal runs after this push looked the repository up and
 	// before it starts. The hook runs again for the push that creates
@@ -492,8 +561,12 @@ func TestSSHPushAfterPushCreatedRemovalCreates(t *testing.T) {
 	cmds.beforeBeginPush = func() {
 		cmds.beforeBeginPush = nil
 		removed, err := be.RemovePushCreatedRepository(ctx, repo)
-		is.NoErr(err)
-		is.True(removed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !removed {
+			t.Fatal("not true: removed")
+		}
 	}
 
 	// The repository's hooks run the server binary, which is the test
@@ -513,7 +586,9 @@ func TestSSHPushAfterPushCreatedRemovalCreates(t *testing.T) {
 			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
 		)
 		out, err := cmd.Output()
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return out
 	}
 	gitCmd("", "init", "-q", "--bare")
@@ -531,16 +606,28 @@ func TestSSHPushAfterPushCreatedRemovalCreates(t *testing.T) {
 	c.SetOut(&out)
 	c.SetErr(io.Discard)
 	c.SetArgs([]string{"shared"})
-	is.NoErr(c.ExecuteContext(adminCtx))
+	if err := c.ExecuteContext(adminCtx); err != nil {
+		t.Fatal(err)
+	}
 
 	cur, err := be.Repository(ctx, "shared")
-	is.NoErr(err) // created anew
-	is.True(cur.ID() != repo.ID())
+	if err != nil {
+		t.Fatal(err)
+	} // created anew
+	if cur.ID() == repo.ID() {
+		t.Fatal("not true: cur.ID() != repo.ID()")
+	}
 	r, err := cur.Open(t.Context())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	head, err := r.HEAD()
-	is.NoErr(err)
-	is.Equal(head.ID(), commit) // with the pushed commit
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := head.ID(); got != commit {
+		t.Fatalf("head.ID() = %v, want %v", got, commit)
+	} // with the pushed commit
 }
 
 // A push to a missing name creates the repository and then pushes to its
@@ -548,7 +635,6 @@ func TestSSHPushAfterPushCreatedRemovalCreates(t *testing.T) {
 // git starts and someone else creates another under the same name, the push
 // must not write to that one, which it was never checked against.
 func TestSSHPushToCreateDoesNotWriteReplacedRepository(t *testing.T) {
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	pusherCtx := withUser(t, ctx, be, "boss", true)
 	otherCtx := withUser(t, ctx, be, "other", true)
@@ -557,10 +643,14 @@ func TestSSHPushToCreateDoesNotWriteReplacedRepository(t *testing.T) {
 	cmds := cmdsOf(ctx)
 	cmds.beforeBeginPush = func() {
 		cmds.beforeBeginPush = nil
-		is.NoErr(be.DeleteRepository(ctx, "fresh"))
+		if err := be.DeleteRepository(ctx, "fresh"); err != nil {
+			t.Fatal(err)
+		}
 		var err error
 		replacement, err = be.CreateRepository(ctx, "fresh", proto.UserFromContext(otherCtx), proto.RepositoryOptions{Private: true})
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// The repository's hooks run the server binary, which is the test
@@ -580,7 +670,9 @@ func TestSSHPushToCreateDoesNotWriteReplacedRepository(t *testing.T) {
 			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
 		)
 		out, err := cmd.Output()
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return out
 	}
 	gitCmd("", "init", "-q", "--bare")
@@ -599,18 +691,30 @@ func TestSSHPushToCreateDoesNotWriteReplacedRepository(t *testing.T) {
 	c.SetErr(io.Discard)
 	c.SetArgs([]string{"fresh"})
 	err := c.ExecuteContext(pusherCtx)
-	is.True(errors.Is(err, proto.ErrRepoNotFound)) // the repository it created is gone
-	is.True(replacement != nil)                    // the hook ran
+	if !errors.Is(err, proto.ErrRepoNotFound) {
+		t.Fatal("not true: errors.Is(err, proto.ErrRepoNotFound)")
+	} // the repository it created is gone
+	if replacement == nil {
+		t.Fatal("not true: replacement != nil")
+	} // the hook ran
 
 	cur, err := be.Repository(ctx, "fresh")
-	is.NoErr(err)
-	is.Equal(cur.ID(), replacement.ID()) // the other repository is still there
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cur.ID(), replacement.ID(); got != want {
+		t.Fatalf("cur.ID() = %v, want %v", got, want)
+	} // the other repository is still there
 	r, err := cur.Open(t.Context())
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := r.HEAD(); err == nil {
 		t.Fatal("the push wrote to the repository that replaced the one it created")
 	}
-	is.True(!strings.Contains(out.String(), "refs/heads/main")) // and git never ran on it
+	if strings.Contains(out.String(), "refs/heads/main") {
+		t.Fatal("not true: !strings.Contains(out.String(), \"refs/heads/main\")")
+	} // and git never ran on it
 }
 
 // beginPushFailStore fails GetRepoByName, which BeginPush reads the
@@ -646,7 +750,6 @@ func TestBeginPushLookupFailure(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			is := is.New(t)
 			armed := new(atomic.Bool)
 			ctx, be, logs := newLookupTestContextWith(t, func(s store.Store) store.Store {
 				return beginPushFailStore{Store: s, armed: armed}
@@ -654,7 +757,9 @@ func TestBeginPushLookupFailure(t *testing.T) {
 			adminCtx := withUser(t, ctx, be, "boss", true)
 			if tc.exists {
 				_, err := be.CreateRepository(ctx, "shared", proto.UserFromContext(adminCtx), proto.RepositoryOptions{})
-				is.NoErr(err)
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			cmdsOf(adminCtx).beforeBeginPush = func() { armed.Store(true) }
 
@@ -666,10 +771,18 @@ func TestBeginPushLookupFailure(t *testing.T) {
 			c.SetErr(io.Discard)
 			c.SetArgs(tc.args)
 			err := c.ExecuteContext(adminCtx)
-			is.True(errors.Is(err, gitserve.ErrSystemMalfunction))
-			is.True(!strings.Contains(err.Error(), "/server/path"))
-			is.Equal(logs.count("ERRO"), 1)
-			is.True(strings.Contains(logs.String(), "/server/path"))
+			if !errors.Is(err, gitserve.ErrSystemMalfunction) {
+				t.Fatal("not true: errors.Is(err, gitserve.ErrSystemMalfunction)")
+			}
+			if strings.Contains(err.Error(), "/server/path") {
+				t.Fatal("not true: !strings.Contains(err.Error(), \"/server/path\")")
+			}
+			if got := logs.count("ERRO"); got != 1 {
+				t.Fatalf("logs.count(\"ERRO\") = %v, want %v", got, 1)
+			}
+			if !strings.Contains(logs.String(), "/server/path") {
+				t.Fatal("not true: strings.Contains(logs.String(), \"/server/path\")")
+			}
 		})
 	}
 }

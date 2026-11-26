@@ -7,24 +7,26 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 )
 
 // repo info shows a mirror's last sync, and the error of its last sync to
 // those with write access: the error can carry what the remote wrote.
 func TestRepoInfoMirrorSync(t *testing.T) {
 	t.Parallel()
-	is := is.New(t)
 	ctx, be := newAuthTestContext(t)
 	ownerCtx := withUser(t, ctx, be, "owner", false)
 	readerCtx := withUser(t, ctx, be, "reader", false)
 	_, err := be.CreateRepository(ownerCtx, "m", proto.UserFromContext(ownerCtx), proto.RepositoryOptions{Mirror: true})
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	info := func(c context.Context) string {
 		t.Helper()
 		stdout, _, err := runRepoOutput(t, c, "info", "m")
-		is.NoErr(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return stdout
 	}
 
@@ -34,8 +36,12 @@ func TestRepoInfoMirrorSync(t *testing.T) {
 	}
 
 	m, err := be.Repository(ctx, "m")
-	is.NoErr(err)
-	is.NoErr(be.RecordMirrorSync(ctx, m, errors.New("fetch failed:\nremote: boom"+escapes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := be.RecordMirrorSync(ctx, m, errors.New("fetch failed:\nremote: boom"+escapes)); err != nil {
+		t.Fatal(err)
+	}
 	out := info(ownerCtx)
 	assertNoControls(t, out)
 	if !strings.Contains(out, "Last Sync Error: fetch failed: remote: boom") {
@@ -45,7 +51,9 @@ func TestRepoInfoMirrorSync(t *testing.T) {
 		t.Errorf("a reader sees the error: %q", out)
 	}
 
-	is.NoErr(be.RecordMirrorSync(ctx, m, nil))
+	if err := be.RecordMirrorSync(ctx, m, nil); err != nil {
+		t.Fatal(err)
+	}
 	out = info(ownerCtx)
 	if !strings.Contains(out, "Last Sync: ") || strings.Contains(out, "Last Sync Error") {
 		t.Errorf("after a sync that succeeded: %q", out)

@@ -11,7 +11,6 @@ import (
 	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/matryer/is"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -19,46 +18,66 @@ import (
 // lowest-ID admin, skipping lower-ID non-admins, and that db.ErrRecordNotFound is
 // returned when no user is an admin.
 func TestFindDefaultAdminUserID(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 
 	// The migration seeds the initial "admin" user; demote it so the test
 	// controls every admin row.
 	_, err := dbx.ExecContext(ctx, `UPDATE users SET admin = false;`)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	_, err = s.FindDefaultAdminUserID(ctx, dbx)
-	is.True(errors.Is(err, db.ErrRecordNotFound))
+	if !errors.Is(err, db.ErrRecordNotFound) {
+		t.Fatal("not true: errors.Is(err, db.ErrRecordNotFound)")
+	}
 
 	_, err = dbx.ExecContext(ctx, `INSERT INTO users (id, username, admin, updated_at) VALUES
 		(200, 'plain1', false, CURRENT_TIMESTAMP),
 		(300, 'admin300', true, CURRENT_TIMESTAMP),
 		(250, 'admin250', true, CURRENT_TIMESTAMP),
 		(400, 'plain2', false, CURRENT_TIMESTAMP);`)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	id, err := s.FindDefaultAdminUserID(ctx, dbx)
-	is.NoErr(err)
-	is.Equal(id, int64(250))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := id, int64(250); got != want {
+		t.Fatalf("id = %v, want %v", got, want)
+	}
 }
 
 // A stored key that does not parse is skipped and logged on the store's
 // logger, not on one taken from the context.
 func TestListPublicKeysLogsOnStoreLogger(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	var logs, ctxLogs bytes.Buffer
 	s := New(log.New(&logs))
 	ctx = log.WithContext(ctx, log.New(&ctxLogs))
 	_, err := dbx.ExecContext(ctx, `INSERT INTO public_keys (user_id, public_key, updated_at) VALUES (1, 'not a key', CURRENT_TIMESTAMP);`)
-	is.NoErr(err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	pks, err := s.ListPublicKeysByUserID(ctx, dbx, 1)
-	is.NoErr(err)
-	is.Equal(len(pks), 0)
-	is.True(strings.Contains(logs.String(), "skipping unparsable stored public key"))
-	is.True(strings.Contains(logs.String(), "store"))
-	is.Equal(ctxLogs.String(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(pks); got != 0 {
+		t.Fatalf("len(pks) = %v, want %v", got, 0)
+	}
+	if !strings.Contains(logs.String(), "skipping unparsable stored public key") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"skipping unparsable stored public key\")")
+	}
+	if !strings.Contains(logs.String(), "store") {
+		t.Fatal("not true: strings.Contains(logs.String(), \"store\")")
+	}
+	if got := ctxLogs.String(); got != "" {
+		t.Fatalf("ctxLogs.String() = %v, want %v", got, "")
+	}
 }
 
 func TestUserStore(t *testing.T) {
@@ -196,24 +215,37 @@ func newTestPublicKey(t *testing.T) ssh.PublicKey {
 // A stored key that no longer parses is skipped, so the user's other keys
 // still work instead of every lookup failing.
 func TestListPublicKeysSkipsUnparsableKey(t *testing.T) {
-	is := is.New(t)
 	ctx, dbx := newWebhookTestDB(t)
 	s := &Store{}
 
 	good1 := newTestPublicKey(t)
 	good2 := newTestPublicKey(t)
-	is.NoErr(s.AddPublicKeyByUserID(ctx, dbx, 100, good1))
+	if err := s.AddPublicKeyByUserID(ctx, dbx, 100, good1); err != nil {
+		t.Fatal(err)
+	}
 	_, err := dbx.ExecContext(ctx, dbx.Rebind(`INSERT INTO public_keys (user_id, public_key, updated_at)
 		VALUES (?, ?, CURRENT_TIMESTAMP);`), 100, "ssh-ed25519 not-base64!!")
-	is.NoErr(err)
-	is.NoErr(s.AddPublicKeyByUserID(ctx, dbx, 100, good2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddPublicKeyByUserID(ctx, dbx, 100, good2); err != nil {
+		t.Fatal(err)
+	}
 
 	check := func(pks []ssh.PublicKey, err error) {
 		t.Helper()
-		is.NoErr(err)
-		is.Equal(len(pks), 2)
-		is.True(proto.KeysEqual(pks[0], good1))
-		is.True(proto.KeysEqual(pks[1], good2))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(pks); got != 2 {
+			t.Fatalf("len(pks) = %v, want %v", got, 2)
+		}
+		if !proto.KeysEqual(pks[0], good1) {
+			t.Fatal("not true: proto.KeysEqual(pks[0], good1)")
+		}
+		if !proto.KeysEqual(pks[1], good2) {
+			t.Fatal("not true: proto.KeysEqual(pks[1], good2)")
+		}
 	}
 	check(s.ListPublicKeysByUserID(ctx, dbx, 100))
 }
