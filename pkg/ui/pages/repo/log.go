@@ -182,7 +182,7 @@ func (l *Log) ShortHelp() []key.Binding {
 
 // FullHelp implements help.KeyMap.
 func (l *Log) FullHelp() [][]key.Binding {
-	k := l.selector.KeyMap
+	k := l.selector.KeyMap()
 	b := make([][]key.Binding, 0)
 	switch l.activeView {
 	case logViewCommits:
@@ -557,7 +557,7 @@ func (l *Log) lastPage() int {
 // wheel at the edge of the page. ok is false when the cursor stays on the
 // page, where the list moves it.
 func (l *Log) pageMove(msg tea.Msg) (page, row int, ok bool) {
-	k := l.selector.KeyMap
+	k := l.selector.KeyMap()
 	last, idx := l.lastPage(), l.selector.Index()
 	var up, down bool
 	switch msg := msg.(type) {

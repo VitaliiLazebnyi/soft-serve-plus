@@ -122,7 +122,7 @@ func (s *Selection) IsFiltering() bool {
 
 // ShortHelp implements help.KeyMap.
 func (s *Selection) ShortHelp() []key.Binding {
-	k := s.selector.KeyMap
+	k := s.selector.KeyMap()
 	kb := make([]key.Binding, 0)
 	kb = append(kb,
 		s.common.KeyMap.UpDown,
@@ -169,7 +169,7 @@ func (s *Selection) FullHelp() [][]key.Binding {
 		})
 	case selectorPane:
 		copyKey := s.common.CopyKey("copy command")
-		k := s.selector.KeyMap
+		k := s.selector.KeyMap()
 		if !s.IsFiltering() {
 			b[0] = append(b[0],
 				s.common.KeyMap.Select,

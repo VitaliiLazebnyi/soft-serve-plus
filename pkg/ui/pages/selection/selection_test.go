@@ -342,9 +342,7 @@ func (d *filterDriver) run(cmd tea.Cmd) []tea.Msg {
 // noBlink turns off the blinking of the filter input's cursor, so that a
 // test does not wait half a second for each blink.
 func noBlink(s *Selection) {
-	st := s.selector.FilterInput.Styles()
-	st.Cursor.Blink = false
-	s.selector.FilterInput.SetStyles(st)
+	s.selector.SetFilterCursorBlink(false)
 }
 
 func (d *filterDriver) send(msg tea.Msg) {
