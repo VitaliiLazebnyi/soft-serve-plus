@@ -24,7 +24,7 @@ func TestWebhooksBareContext(t *testing.T) {
 	e := newWebhookEnv(t)
 	ctx := context.Background()
 
-	is.NoErr(e.be.CreateWebhook(ctx, e.repo, whURL, webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true))
+	is.NoErr(e.be.CreateWebhook(ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}))
 	hooks, err := e.be.ListWebhooks(ctx, e.repo)
 	is.NoErr(err)
 	is.Equal(len(hooks), 1)
@@ -34,7 +34,7 @@ func TestWebhooksBareContext(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(h.URL, whURL)
 
-	is.NoErr(e.be.UpdateWebhook(ctx, e.repo, id, whURLOther, webhook.ContentTypeForm, "", []webhook.Event{webhook.EventPush}, true))
+	is.NoErr(e.be.UpdateWebhook(ctx, e.repo, id, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeForm, Events: []webhook.Event{webhook.EventPush}, Active: true}))
 	h, err = e.be.Webhook(ctx, e.repo, id)
 	is.NoErr(err)
 	is.Equal(h.URL, whURLOther)

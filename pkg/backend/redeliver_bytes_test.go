@@ -36,7 +36,7 @@ func TestRedeliverSendsStoredBytes(t *testing.T) {
 			}))
 			e.setWebhookAllowedHosts(t, "127.0.0.0/8")
 			url := srv.URL + "/hook"
-			is.NoErr(e.be.CreateWebhook(e.ctx, e.repo, url, ct, "secret", []webhook.Event{webhook.EventRepositoryVisibilityChange}, true))
+			is.NoErr(e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: url, ContentType: ct, Secret: "secret", Events: []webhook.Event{webhook.EventRepositoryVisibilityChange}, Active: true}))
 			hooks, err := e.be.ListWebhooks(e.ctx, e.repo)
 			is.NoErr(err)
 			is.Equal(len(hooks), 1)

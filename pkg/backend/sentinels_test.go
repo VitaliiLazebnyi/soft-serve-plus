@@ -26,7 +26,7 @@ func TestWebhookNotFoundSentinels(t *testing.T) {
 
 	_, err := e.be.Webhook(e.ctx, e.repo, missing)
 	is.True(errors.Is(err, proto.ErrWebhookNotFound))
-	is.True(errors.Is(e.be.UpdateWebhook(e.ctx, e.repo, missing, whURL, 1, "", nil, true), proto.ErrWebhookNotFound))
+	is.True(errors.Is(e.be.UpdateWebhook(e.ctx, e.repo, missing, WebhookInput{URL: whURL, ContentType: 1, Active: true}), proto.ErrWebhookNotFound))
 	is.True(errors.Is(e.be.DeleteWebhook(e.ctx, e.repo, missing), proto.ErrWebhookNotFound))
 	_, err = e.be.ListWebhookDeliveries(e.ctx, e.repo, missing)
 	is.True(errors.Is(err, proto.ErrWebhookNotFound))

@@ -77,7 +77,7 @@ func (e whEnv) otherRepo(t *testing.T) (proto.Repository, int64) {
 	is := is.New(t)
 	other, err := e.be.CreateRepository(e.ctx, "other", e.admin, proto.RepositoryOptions{})
 	is.NoErr(err)
-	is.NoErr(e.be.CreateWebhook(e.ctx, other, whURLOther, webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true))
+	is.NoErr(e.be.CreateWebhook(e.ctx, other, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}))
 	hooks, err := e.be.ListWebhooks(e.ctx, other)
 	is.NoErr(err)
 	is.Equal(len(hooks), 1)
@@ -93,7 +93,7 @@ func sortedEvents(evs []webhook.Event) []webhook.Event {
 func (e whEnv) createHook(t *testing.T, url string, events ...webhook.Event) int64 {
 	t.Helper()
 	is := is.New(t)
-	is.NoErr(e.be.CreateWebhook(e.ctx, e.repo, url, webhook.ContentTypeJSON, "", events, true))
+	is.NoErr(e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: url, ContentType: webhook.ContentTypeJSON, Events: events, Active: true}))
 	hooks, err := e.be.ListWebhooks(e.ctx, e.repo)
 	is.NoErr(err)
 	for _, h := range hooks {
@@ -110,8 +110,7 @@ func TestCreateWebhookStoresFields(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
-	is.NoErr(e.be.CreateWebhook(e.ctx, e.repo, whURL, webhook.ContentTypeForm, "s3cret",
-		[]webhook.Event{webhook.EventPush, webhook.EventBranchTagCreate}, true))
+	is.NoErr(e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeForm, Secret: "s3cret", Events: []webhook.Event{webhook.EventPush, webhook.EventBranchTagCreate}, Active: true}))
 
 	hooks, err := e.be.ListWebhooks(e.ctx, e.repo)
 	is.NoErr(err)
@@ -153,7 +152,7 @@ func TestCreateWebhookRejectsUnsafeURLs(t *testing.T) {
 		"http://10.0.0.1/hook",
 		"http://169.254.169.254/latest/meta-data",
 	} {
-		err := e.be.CreateWebhook(e.ctx, e.repo, u, webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true)
+		err := e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: u, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true})
 		is.True(err != nil)
 	}
 
@@ -167,7 +166,7 @@ func TestCreateWebhookSanitizesURL(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
-	is.NoErr(e.be.CreateWebhook(e.ctx, e.repo, whURL+"\x1b[31m", webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true))
+	is.NoErr(e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL + "\x1b[31m", ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}))
 
 	hooks, err := e.be.ListWebhooks(e.ctx, e.repo)
 	is.NoErr(err)
@@ -182,7 +181,7 @@ func TestCreateWebhookRejectsInvalidContentType(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
-	err := e.be.CreateWebhook(e.ctx, e.repo, whURL, webhook.ContentType(99), "", []webhook.Event{webhook.EventPush}, true)
+	err := e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentType(99), Events: []webhook.Event{webhook.EventPush}, Active: true})
 	is.True(err != nil)
 }
 
@@ -192,7 +191,7 @@ func TestCreateWebhookRejectsUnknownEvent(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
-	err := e.be.CreateWebhook(e.ctx, e.repo, whURL, webhook.ContentTypeJSON, "", []webhook.Event{webhook.Event(99)}, true)
+	err := e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.Event(99)}, Active: true})
 	is.True(err != nil)
 }
 
@@ -204,8 +203,7 @@ func TestCreateWebhookAcceptsDuplicateEvents(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
-	is.NoErr(e.be.CreateWebhook(e.ctx, e.repo, whURL, webhook.ContentTypeJSON, "",
-		[]webhook.Event{webhook.EventPush, webhook.EventPush}, true))
+	is.NoErr(e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush, webhook.EventPush}, Active: true}))
 
 	hooks, err := e.be.ListWebhooks(e.ctx, e.repo)
 	is.NoErr(err)
@@ -225,7 +223,7 @@ func TestCreateWebhookCapsWebhooksPerRepo(t *testing.T) {
 		ids = append(ids, e.createHook(t, fmt.Sprintf("%s/%d", whURL, i), webhook.EventPush))
 	}
 
-	err := e.be.CreateWebhook(e.ctx, e.repo, whURL+"/extra", webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true)
+	err := e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL + "/extra", ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true})
 	is.True(errors.Is(err, webhook.ErrTooManyWebhooks))
 	hooks, err := e.be.ListWebhooks(e.ctx, e.repo)
 	is.NoErr(err)
@@ -261,8 +259,7 @@ func testConcurrentCreates(t *testing.T, e whEnv) {
 	for i := range n {
 		wg.Go(func() {
 			<-start
-			errs <- e.be.CreateWebhook(e.ctx, e.repo, fmt.Sprintf("%s/%d", whURL, i),
-				webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true)
+			errs <- e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: fmt.Sprintf("%s/%d", whURL, i), ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true})
 		})
 	}
 	close(start)
@@ -293,8 +290,7 @@ func TestUpdateWebhookChangesEverything(t *testing.T) {
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush, webhook.EventCollaborator)
 
-	is.NoErr(e.be.UpdateWebhook(e.ctx, e.repo, id, whURLOther, webhook.ContentTypeForm, "new",
-		[]webhook.Event{webhook.EventPush, webhook.EventRepository}, false))
+	is.NoErr(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeForm, Secret: "new", Events: []webhook.Event{webhook.EventPush, webhook.EventRepository}, Active: false}))
 
 	got, err := e.be.Webhook(e.ctx, e.repo, id)
 	is.NoErr(err)
@@ -314,8 +310,7 @@ func TestUpdateWebhookWithSameEvents(t *testing.T) {
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
 
-	is.NoErr(e.be.UpdateWebhook(e.ctx, e.repo, id, whURL, webhook.ContentTypeJSON, "",
-		[]webhook.Event{webhook.EventPush}, true))
+	is.NoErr(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}))
 }
 
 // Suspected bug: a plain add (nothing removed) hits the same empty IN clause.
@@ -325,8 +320,7 @@ func TestUpdateWebhookAddsEventOnly(t *testing.T) {
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
 
-	is.NoErr(e.be.UpdateWebhook(e.ctx, e.repo, id, whURL, webhook.ContentTypeJSON, "",
-		[]webhook.Event{webhook.EventPush, webhook.EventRepository}, true))
+	is.NoErr(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush, webhook.EventRepository}, Active: true}))
 
 	got, err := e.be.Webhook(e.ctx, e.repo, id)
 	is.NoErr(err)
@@ -341,8 +335,7 @@ func TestUpdateWebhookSanitizesURL(t *testing.T) {
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
 
-	is.NoErr(e.be.UpdateWebhook(e.ctx, e.repo, id, whURLOther+"\x1b[31m", webhook.ContentTypeJSON, "",
-		[]webhook.Event{webhook.EventPush}, true))
+	is.NoErr(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURLOther + "\x1b[31m", ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}))
 
 	got, err := e.be.Webhook(e.ctx, e.repo, id)
 	is.NoErr(err)
@@ -355,8 +348,7 @@ func TestUpdateWebhookRejectsUnsafeURL(t *testing.T) {
 	e := newWebhookEnv(t)
 	id := e.createHook(t, whURL, webhook.EventPush)
 
-	err := e.be.UpdateWebhook(e.ctx, e.repo, id, "http://127.0.0.1/hook", webhook.ContentTypeJSON, "",
-		[]webhook.Event{webhook.EventPush}, true)
+	err := e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: "http://127.0.0.1/hook", ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true})
 	is.True(err != nil)
 
 	got, err := e.be.Webhook(e.ctx, e.repo, id)
@@ -372,8 +364,7 @@ func TestUpdateWebhookUnknownIDFails(t *testing.T) {
 	is := is.New(t)
 	e := newWebhookEnv(t)
 
-	err := e.be.UpdateWebhook(e.ctx, e.repo, 424242, whURL, webhook.ContentTypeJSON, "",
-		[]webhook.Event{webhook.EventPush}, true)
+	err := e.be.UpdateWebhook(e.ctx, e.repo, 424242, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true})
 	is.True(err != nil)
 }
 
@@ -386,8 +377,7 @@ func TestUpdateWebhookCannotTouchOtherRepo(t *testing.T) {
 	e := newWebhookEnv(t)
 	other, otherID := e.otherRepo(t)
 
-	_ = e.be.UpdateWebhook(e.ctx, e.repo, otherID, whURL, webhook.ContentTypeForm, "pwned",
-		[]webhook.Event{webhook.EventRepository}, false)
+	_ = e.be.UpdateWebhook(e.ctx, e.repo, otherID, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeForm, Secret: "pwned", Events: []webhook.Event{webhook.EventRepository}, Active: false})
 
 	got, err := e.be.Webhook(e.ctx, other, otherID)
 	is.NoErr(err)
@@ -706,8 +696,8 @@ func TestErrorPathsWhenStoreFails(t *testing.T) {
 	is.True(err != nil)
 	_, err = e.be.Webhook(e.ctx, e.repo, id)
 	is.True(err != nil)
-	is.True(e.be.UpdateWebhook(e.ctx, e.repo, id, whURL, webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventRepository}, true) != nil)
-	is.True(e.be.CreateWebhook(e.ctx, e.repo, whURLOther, webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true) != nil)
+	is.True(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventRepository}, Active: true}) != nil)
+	is.True(e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) != nil)
 
 	// Deliveries table gone.
 	drop("webhook_deliveries")
@@ -719,10 +709,10 @@ func TestErrorPathsWhenStoreFails(t *testing.T) {
 
 	// Webhooks table gone: every entry point fails.
 	drop("webhooks")
-	is.True(e.be.CreateWebhook(e.ctx, e.repo, whURL, webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true) != nil)
+	is.True(e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) != nil)
 	_, err = e.be.ListWebhooks(e.ctx, e.repo)
 	is.True(err != nil)
-	is.True(e.be.UpdateWebhook(e.ctx, e.repo, id, whURL, webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true) != nil)
+	is.True(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) != nil)
 	is.True(e.be.DeleteWebhook(e.ctx, e.repo, id) != nil)
 }
 
@@ -735,8 +725,7 @@ func TestUpdateWebhookFailsOnDuplicateURL(t *testing.T) {
 	a := e.createHook(t, whURL, webhook.EventPush)
 	b := e.createHook(t, whURLOther, webhook.EventPush)
 
-	is.True(e.be.UpdateWebhook(e.ctx, e.repo, b, whURL, webhook.ContentTypeJSON, "",
-		[]webhook.Event{webhook.EventRepository}, true) != nil)
+	is.True(e.be.UpdateWebhook(e.ctx, e.repo, b, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventRepository}, Active: true}) != nil)
 
 	gotB, err := e.be.Webhook(e.ctx, e.repo, b)
 	is.NoErr(err)
@@ -773,8 +762,7 @@ func TestUpdateWebhookRollsBackOnEventDeleteFailure(t *testing.T) {
 	id := e.createHook(t, whURL, webhook.EventPush, webhook.EventCollaborator)
 
 	e.execTrigger(t, "fail_event_delete", "BEFORE", "DELETE", "webhook_events")
-	is.True(e.be.UpdateWebhook(e.ctx, e.repo, id, whURLOther, webhook.ContentTypeForm, "x",
-		[]webhook.Event{webhook.EventPush}, false) != nil)
+	is.True(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeForm, Secret: "x", Events: []webhook.Event{webhook.EventPush}, Active: false}) != nil)
 	e.dropTrigger(t, "fail_event_delete")
 
 	got, err := e.be.Webhook(e.ctx, e.repo, id)
@@ -792,8 +780,7 @@ func TestUpdateWebhookRollsBackOnEventInsertFailure(t *testing.T) {
 	id := e.createHook(t, whURL, webhook.EventPush)
 
 	e.execTrigger(t, "fail_event_insert", "BEFORE", "INSERT", "webhook_events")
-	is.True(e.be.UpdateWebhook(e.ctx, e.repo, id, whURLOther, webhook.ContentTypeJSON, "",
-		[]webhook.Event{webhook.EventPush, webhook.EventRepository}, true) != nil)
+	is.True(e.be.UpdateWebhook(e.ctx, e.repo, id, WebhookInput{URL: whURLOther, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush, webhook.EventRepository}, Active: true}) != nil)
 	e.dropTrigger(t, "fail_event_insert")
 
 	got, err := e.be.Webhook(e.ctx, e.repo, id)
@@ -836,7 +823,7 @@ func TestCreateWebhookRollsBackOnEventInsertFailure(t *testing.T) {
 	e := newWebhookEnv(t)
 
 	e.execTrigger(t, "fail_create_event", "BEFORE", "INSERT", "webhook_events")
-	is.True(e.be.CreateWebhook(e.ctx, e.repo, whURL, webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true) != nil)
+	is.True(e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}) != nil)
 	e.dropTrigger(t, "fail_create_event")
 
 	hooks, err := e.be.ListWebhooks(e.ctx, e.repo)
@@ -954,7 +941,7 @@ func TestCreateWebhookOnDeletedRepository(t *testing.T) {
 	e := newWebhookEnv(t)
 	is.NoErr(e.be.DeleteRepository(e.ctx, "repo"))
 
-	err := e.be.CreateWebhook(e.ctx, e.repo, whURL, webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true)
+	err := e.be.CreateWebhook(e.ctx, e.repo, WebhookInput{URL: whURL, ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true})
 	is.True(errors.Is(err, proto.ErrRepoNotFound))
 }
 

@@ -31,6 +31,11 @@ func TestLoadServerConfig(t *testing.T) {
 	if cfg == nil || cfg.Name != "from env" || cfg.Log.Path != filepath.Join(dp, "soft.log") {
 		t.Fatalf("config = %+v, want the file's log path and the environment's name", cfg)
 	}
+	// The config carries main's version, which webhook requests name in
+	// their User-Agent.
+	if cfg.Version == "" || cfg.Version != Version {
+		t.Errorf("config Version = %q, want main's Version %q", cfg.Version, Version)
+	}
 	if log.Default() != logger {
 		t.Error("the loaded logger is not the default one")
 	}

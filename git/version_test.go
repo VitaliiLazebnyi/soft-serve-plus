@@ -73,7 +73,7 @@ func TestVersionLess(t *testing.T) {
 // TestBinVersion checks the installed git parses, which also covers whatever
 // vendor suffix the CI platform adds.
 func TestBinVersion(t *testing.T) {
-	v, err := BinVersion()
+	v, err := BinVersion(t.Context())
 	if err != nil {
 		t.Fatalf("BinVersion(): %v", err)
 	}
@@ -87,12 +87,12 @@ func TestBinVersion(t *testing.T) {
 func TestBinVersionRetriesAfterFailure(t *testing.T) {
 	path := os.Getenv("PATH")
 	t.Setenv("PATH", t.TempDir())
-	if _, err := BinVersion(); err == nil {
+	if _, err := BinVersion(t.Context()); err == nil {
 		t.Fatal("BinVersion() with no git on PATH: want error, got nil")
 	}
 
 	t.Setenv("PATH", path)
-	v, err := BinVersion()
+	v, err := BinVersion(t.Context())
 	if err != nil {
 		t.Fatalf("BinVersion() after git is back on PATH: %v", err)
 	}

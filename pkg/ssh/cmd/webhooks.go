@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2/table"
 	"github.com/charmbracelet/soft-serve/internal/termtext"
 	"github.com/charmbracelet/soft-serve/pkg/access"
+	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	"github.com/dustin/go-humanize"
@@ -106,7 +107,7 @@ func (cmds *Commands) webhookCreateCommand() *cobra.Command {
 			}
 
 			url := termtext.Sanitize(args[1])
-			return be.CreateWebhook(ctx, repo, strings.TrimSpace(url), ct, secret, evs, active)
+			return be.CreateWebhook(ctx, repo, backend.WebhookInput{URL: strings.TrimSpace(url), ContentType: ct, Secret: secret, Events: evs, Active: active})
 		}),
 	}
 
@@ -233,7 +234,7 @@ func (cmds *Commands) webhookUpdateCommand() *cobra.Command {
 				}
 			}
 
-			return be.UpdateWebhook(ctx, repo, id, newURL, newContentType, newSecret, newEvents, newActive)
+			return be.UpdateWebhook(ctx, repo, id, backend.WebhookInput{URL: newURL, ContentType: newContentType, Secret: newSecret, Events: newEvents, Active: newActive})
 		}),
 	}
 

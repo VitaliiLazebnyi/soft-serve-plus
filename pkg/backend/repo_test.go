@@ -508,12 +508,12 @@ func TestImportRepositoryDisabled(t *testing.T) {
 			t.Parallel()
 			is := is.New(t)
 			be, _ := newTestBackend(t)
-			be.binVersion = func() (git.Version, error) { return tt.version, tt.err }
+			be.binVersion = func(context.Context) (git.Version, error) { return tt.version, tt.err }
 			ctx := context.Background()
 			admin, err := be.User(ctx, "admin")
 			is.NoErr(err)
 
-			reason := be.ImportsDisabledReason()
+			reason := be.ImportsDisabledReason(context.Background())
 			is.Equal(reason != "", tt.disabled)
 			if !tt.disabled {
 				return
@@ -538,14 +538,38 @@ func TestImportGateChecksOnce(t *testing.T) {
 	var calls int
 	err := errors.New("fork/exec git: resource temporarily unavailable")
 	be, _ := newTestBackend(t)
-	be.binVersion = func() (git.Version, error) {
+	be.binVersion = func(context.Context) (git.Version, error) {
 		calls++
 		return git.Version{Major: 2, Minor: 45}, err
 	}
-	is.True(be.ImportsDisabledReason() != "")
+	is.True(be.ImportsDisabledReason(context.Background()) != "")
 	err = nil
-	is.True(be.ImportsDisabledReason() != "")
+	is.True(be.ImportsDisabledReason(context.Background()) != "")
 	is.Equal(calls, 1)
+}
+
+// TestImportGateRechecksAfterCanceledCheck verifies that a check of git's
+// version that its caller's context cut short is not kept: it says nothing
+// about git, so it must not close imports until restart. The next check
+// runs, and its answer is kept.
+func TestImportGateRechecksAfterCanceledCheck(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	var calls int
+	be, _ := newTestBackend(t)
+	be.binVersion = func(ctx context.Context) (git.Version, error) {
+		calls++
+		if err := ctx.Err(); err != nil {
+			return git.Version{}, err
+		}
+		return git.Version{Major: 2, Minor: 45}, nil
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	is.True(be.ImportsDisabledReason(canceled) != "")
+	is.Equal(be.ImportsDisabledReason(context.Background()), "")
+	is.Equal(be.ImportsDisabledReason(canceled), "")
+	is.Equal(calls, 2)
 }
 
 // TestImportRefusesSSHLFSEndpoint verifies that an import asking for LFS

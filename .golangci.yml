@@ -47,8 +47,9 @@ linters:
     presets:
       # This preset also hides gosec's G103, G204 and G304. The 15 findings
       # it hides outside test files were reviewed as false positives: git
-      # run with argument lists, the operator's custom hook, and paths the
-      # operator configures or the server owns.
+      # run with argument lists, the operator's custom hook, paths the
+      # operator configures or the server owns, and, in the test helpers
+      # git/gittest/count.go and gittest.go, a test's own git and log file.
       - common-false-positives
     rules:
       - text: '(slog|log)\.\w+'

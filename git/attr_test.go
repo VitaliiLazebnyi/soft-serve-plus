@@ -124,12 +124,12 @@ func TestCheckAttributesQuotedPath(t *testing.T) {
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
-			if tc.source && !attrSourceSupported() {
+			if tc.source && !attrSourceSupported(t.Context()) {
 				t.Skip("git check-attr --source requires git 2.40")
 			}
 			r := *repo
 			asked := false
-			r.attrSource = func() bool { asked = true; return tc.source }
+			r.attrSource = func(context.Context) bool { asked = true; return tc.source }
 
 			attrs, err := r.CheckAttributes(ref, name)
 			if err != nil {
@@ -168,5 +168,33 @@ func TestCheckAttributesReadsVersionOnce(t *testing.T) {
 	}
 	if versions > 1 {
 		t.Errorf("three CheckAttributes calls ran git version %d times, want at most once", versions)
+	}
+}
+
+// A repository whose client has gone starts no `git version` to learn
+// whether check-attr takes --source: the check runs under the repository's
+// context, and a check that context cut short is not kept, so the next
+// repository checks again.
+func TestCheckAttributesAfterClientGoneRunsNoGit(t *testing.T) {
+	setup, ref := setupAttrRepo(t, "a.bin")
+	ctx, cancel := context.WithCancel(t.Context())
+	repo, err := Open(ctx, setup.Path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	saved := attrSource.Load()
+	attrSource.Store(0)
+	t.Cleanup(func() { attrSource.Store(saved) })
+
+	calls := gittest.CountGit(t)
+	cancel()
+	if _, err := repo.CheckAttributes(ref, "a.bin"); err == nil {
+		t.Error("CheckAttributes after the client went away: want an error, got nil")
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("CheckAttributes after the client went away ran git: %q", got)
+	}
+	if v := attrSource.Load(); v != 0 {
+		t.Errorf("a check cut short was kept: attrSource = %d, want 0", v)
 	}
 }

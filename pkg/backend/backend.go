@@ -30,10 +30,12 @@ type Backend struct {
 	store  store.Store
 	logger *log.Logger
 
-	// importsDisabled returns why imports and mirror syncs are off, or ""
-	// when they are allowed. It checks git's version once, on first use:
-	// the server asks at start-up.
-	importsDisabled func() string
+	// importsMu guards importsChecked and importsReason, the answer of the
+	// import gate (see ImportsDisabledReason) once a check of git's version
+	// has given one.
+	importsMu      sync.Mutex
+	importsChecked bool
+	importsReason  string
 
 	// deliveries runs the webhook deliveries in the background, bounded, and
 	// tracks them so shutdown can wait for them.
@@ -65,7 +67,7 @@ type Backend struct {
 	// package, each on its own Backend.
 
 	// binVersion returns the installed git's version, for the import gate.
-	binVersion func() (git.Version, error)
+	binVersion func(ctx context.Context) (git.Version, error)
 	// validateGitRemote validates an import or mirror remote.
 	validateGitRemote func(ctx context.Context, remote string, policy ssrf.GitRemotePolicy) (ssrf.ValidatedGitRemote, error)
 	// searchPointerBlobs scans a repository for LFS pointers.
@@ -127,18 +129,26 @@ func New(cfg *config.Config, dbx *db.DB, st store.Store, logger *log.Logger) *Ba
 		searchPointerBlobs: searchPointerBlobs,
 		importTimeout:      time.Hour,
 	}
-	// The version is read through the field when first needed, so a test
-	// can replace binVersion after New.
-	b.importsDisabled = sync.OnceValue(func() string { return checkGitVersion(b.binVersion) })
 	return b
 }
 
 // ImportsDisabledReason returns why repository imports and mirror syncs are
-// off, or "" when they are allowed. git's version is checked once per
-// process; the server does so at start-up, and logs the reason. The reason
-// is for the server log; users get proto.ErrImportsDisabled.
-func (d *Backend) ImportsDisabledReason() string {
-	return d.importsDisabled()
+// off, or "" when they are allowed. git's version is checked under ctx, once
+// per backend; the server does so at start-up, and logs the reason. A check
+// that ctx cut short says nothing about git, so it is not kept and the next
+// caller checks again. The reason is for the server log; users get
+// proto.ErrImportsDisabled.
+func (d *Backend) ImportsDisabledReason(ctx context.Context) string {
+	d.importsMu.Lock()
+	defer d.importsMu.Unlock()
+	if d.importsChecked {
+		return d.importsReason
+	}
+	reason := checkGitVersion(ctx, d.binVersion)
+	if reason == "" || ctx.Err() == nil {
+		d.importsChecked, d.importsReason = true, reason
+	}
+	return reason
 }
 
 // minImportGitVersion is the oldest git that honours the settings the import
@@ -149,11 +159,11 @@ func (d *Backend) ImportsDisabledReason() string {
 var minImportGitVersion = git.Version{Major: 2, Minor: 37}
 
 // checkGitVersion returns why imports must stay off, or "" if the git whose
-// version binVersion returns is new enough. Running a clone under a git that
-// ignores the guards would be worse than refusing it, so an unreadable
-// version also closes the gate, until the server restarts.
-func checkGitVersion(binVersion func() (git.Version, error)) string {
-	v, err := binVersion()
+// version binVersion returns under ctx is new enough. Running a clone under a
+// git that ignores the guards would be worse than refusing it, so an
+// unreadable version also closes the gate, until the server restarts.
+func checkGitVersion(ctx context.Context, binVersion func(ctx context.Context) (git.Version, error)) string {
+	v, err := binVersion(ctx)
 	if err != nil {
 		return fmt.Sprintf("cannot determine git version: %v", err)
 	}

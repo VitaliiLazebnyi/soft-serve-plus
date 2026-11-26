@@ -328,7 +328,7 @@ type caller struct {
 // logger is the request's logger.
 func (s *server) identify(r *http.Request, logger *log.Logger, repos ...string) (caller, error) {
 	// authenticate logs why credentials failed, and returns only bad
-	// credentials, errAuthUnavailable or proto.ErrUserNotFound.
+	// credentials or errAuthUnavailable.
 	user, audience, err := s.authenticate(r, logger, repos...)
 	if user != nil {
 		logger.Debug("authenticated", "username", user.Username())
@@ -553,7 +553,7 @@ func (s *server) withCaller(next callerHandler) http.HandlerFunc {
 }
 
 // isBearer reports whether the Authorization header value hdr carries a
-// bearer token. The scheme is case-insensitive, as parseAuthHdr reads it.
+// bearer token. The scheme is case-insensitive, as authenticate reads it.
 func isBearer(hdr string) bool {
 	scheme, _, ok := strings.Cut(hdr, " ")
 	return ok && strings.EqualFold(scheme, "bearer")
@@ -623,89 +623,12 @@ func (s *server) withAccess(route gitRoute, w http.ResponseWriter, r *http.Reque
 
 	v := authorize(need, repo != nil, accessLevel, user == nil, badCredentials(err))
 	if v == createThenServe {
-		if verr := proto.ValidateRepo(proto.SanitizeRepo(repoName)); verr != nil {
-			logger.Debug("refusing push-to-create", "repo", repoName, "err", verr)
-			// git shows a text/plain error body to the user.
-			http.Error(w, verr.Error(), http.StatusBadRequest)
+		var ok bool
+		if repo, accessLevel, v, ok = s.createOnPush(w, r, gr, need, accessLevel, lfsJSON); !ok {
 			return
-		}
-		private, cerr := be.DefaultPrivate(ctx, user)
-		if errors.Is(cerr, proto.ErrAnonymousPrivate) {
-			logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
-			// Ask for credentials, as for the unauthorized verdict: git
-			// sends none on its first request, and only retries with
-			// them after a 401. A signed-in user then creates the
-			// repository; an anonymous client sees this body.
-			askCredentials(w, r)
-			http.Error(w, cerr.Error()+"; authenticate to create a repository by pushing, or ask an admin", http.StatusUnauthorized)
-			return
-		}
-		if cerr == nil {
-			if s.beforePushCreate != nil {
-				s.beforePushCreate()
-			}
-			repo, cerr = be.CreateRepository(ctx, repoName, user, proto.RepositoryOptions{Private: private})
-		}
-		switch {
-		case errors.Is(cerr, proto.ErrLookupFailed):
-			lookupUnavailable(w, r, logger, repoName, cerr, lfsJSON)
-			return
-		case errors.Is(cerr, proto.ErrUnauthorized) && user == nil:
-			logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
-			// As above: git sends credentials only after a 401, so ask
-			// for them. A signed-in admin then creates the repository; an
-			// anonymous client sees this body.
-			askCredentials(w, r)
-			http.Error(w, cerr.Error()+"; authenticate to create this repository by pushing", http.StatusUnauthorized)
-			return
-		case errors.Is(cerr, proto.ErrRepoLimitReached) || errors.Is(cerr, proto.ErrUnauthorized):
-			logger.Info("refusing push-to-create", "repo", repoName, "err", cerr)
-			http.Error(w, cerr.Error(), http.StatusForbidden)
-			return
-		case errors.Is(cerr, proto.ErrRepoExist):
-			// Another request created the name since it was looked
-			// up. Authorize the caller for the repository now there,
-			// as if it had been there all along.
-			repo, accessLevel, lerr = be.Readable(ctx, repoName, user)
-			if lerr != nil {
-				lookupUnavailable(w, r, logger, repoName, lerr, lfsJSON)
-				return
-			}
-			v = authorize(need, repo != nil, accessLevel, user == nil, false)
-			if v == createThenServe {
-				// The name was freed again before it could be looked
-				// up, by a creation that failed or a removal.
-				logger.Info("refusing push-to-create", "repo", repoName, "err", cerr)
-				http.Error(w, cerr.Error(), http.StatusConflict)
-				return
-			}
-		case cerr != nil:
-			logger.Error("failed to create repository", "repo", repoName, "err", cerr)
-			renderInternalServerError(w, r)
-			return
-		default:
-			s.pending.add(repoName, repo, user)
 		}
 	}
-
-	switch v {
-	case denyUnreadable:
-		denyRead(w, r, gr, err, lfsJSON)
-		return
-	case forbid:
-		if lfsJSON {
-			// Only bad credentials forbid an LFS request.
-			renderJSON(w, logger, http.StatusForbidden, lfs.ErrorResponse{Message: "bad credentials"})
-		} else {
-			renderForbidden(w, r)
-		}
-		return
-	case unauthorized:
-		askCredentials(w, r)
-		renderUnauthorized(w, r)
-		return
-	case forbidLFSWrite, unauthorizedLFS:
-		denyLFSWrite(w, r, gr)
+	if refuseVerdict(w, r, gr, v, err, lfsJSON) {
 		return
 	}
 
@@ -734,6 +657,112 @@ func (s *server) withAccess(route gitRoute, w http.ResponseWriter, r *http.Reque
 
 	gr.repo, gr.level = repo, accessLevel
 	route.handler(s, w, r, gr)
+}
+
+// createOnPush creates the missing repository gr names, for withAccess's
+// createThenServe verdict; level is the caller's access level to the name.
+// It returns the repository, the caller's access level to it and the verdict
+// to go on with, and records a repository it created in pending. It reports
+// false when it has answered the request itself.
+func (s *server) createOnPush(w http.ResponseWriter, r *http.Request, gr *gitRequest, need routeAccess, level access.Level, lfsJSON bool) (proto.Repository, access.Level, verdict, bool) {
+	ctx := r.Context()
+	be := s.be
+	logger := gr.logger
+	user := gr.user
+	repoName := gr.name
+
+	if verr := proto.ValidateRepo(proto.SanitizeRepo(repoName)); verr != nil {
+		logger.Debug("refusing push-to-create", "repo", repoName, "err", verr)
+		// git shows a text/plain error body to the user.
+		http.Error(w, verr.Error(), http.StatusBadRequest)
+		return nil, 0, 0, false
+	}
+	private, cerr := be.DefaultPrivate(ctx, user)
+	if errors.Is(cerr, proto.ErrAnonymousPrivate) {
+		logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
+		// Ask for credentials, as for the unauthorized verdict: git
+		// sends none on its first request, and only retries with
+		// them after a 401. A signed-in user then creates the
+		// repository; an anonymous client sees this body.
+		askCredentials(w, r)
+		http.Error(w, cerr.Error()+"; authenticate to create a repository by pushing, or ask an admin", http.StatusUnauthorized)
+		return nil, 0, 0, false
+	}
+	var repo proto.Repository
+	if cerr == nil {
+		if s.beforePushCreate != nil {
+			s.beforePushCreate()
+		}
+		repo, cerr = be.CreateRepository(ctx, repoName, user, proto.RepositoryOptions{Private: private})
+	}
+	switch {
+	case errors.Is(cerr, proto.ErrLookupFailed):
+		lookupUnavailable(w, r, logger, repoName, cerr, lfsJSON)
+		return nil, 0, 0, false
+	case errors.Is(cerr, proto.ErrUnauthorized) && user == nil:
+		logger.Info("refusing anonymous push-to-create", "repo", repoName, "err", cerr)
+		// As above: git sends credentials only after a 401, so ask
+		// for them. A signed-in admin then creates the repository; an
+		// anonymous client sees this body.
+		askCredentials(w, r)
+		http.Error(w, cerr.Error()+"; authenticate to create this repository by pushing", http.StatusUnauthorized)
+		return nil, 0, 0, false
+	case errors.Is(cerr, proto.ErrRepoLimitReached) || errors.Is(cerr, proto.ErrUnauthorized):
+		logger.Info("refusing push-to-create", "repo", repoName, "err", cerr)
+		http.Error(w, cerr.Error(), http.StatusForbidden)
+		return nil, 0, 0, false
+	case errors.Is(cerr, proto.ErrRepoExist):
+		// Another request created the name since it was looked
+		// up. Authorize the caller for the repository now there,
+		// as if it had been there all along.
+		var lerr error
+		repo, level, lerr = be.Readable(ctx, repoName, user)
+		if lerr != nil {
+			lookupUnavailable(w, r, logger, repoName, lerr, lfsJSON)
+			return nil, 0, 0, false
+		}
+		v := authorize(need, repo != nil, level, user == nil, false)
+		if v == createThenServe {
+			// The name was freed again before it could be looked
+			// up, by a creation that failed or a removal.
+			logger.Info("refusing push-to-create", "repo", repoName, "err", cerr)
+			http.Error(w, cerr.Error(), http.StatusConflict)
+			return nil, 0, 0, false
+		}
+		return repo, level, v, true
+	case cerr != nil:
+		logger.Error("failed to create repository", "repo", repoName, "err", cerr)
+		renderInternalServerError(w, r)
+		return nil, 0, 0, false
+	default:
+		s.pending.add(repoName, repo, user)
+		return repo, level, createThenServe, true
+	}
+}
+
+// refuseVerdict answers gr's caller as verdict v says, when it refuses the
+// request, and reports whether it did. err is the authentication error,
+// for denyRead.
+func refuseVerdict(w http.ResponseWriter, r *http.Request, gr *gitRequest, v verdict, err error, lfsJSON bool) bool {
+	switch v {
+	case denyUnreadable:
+		denyRead(w, r, gr, err, lfsJSON)
+	case forbid:
+		if lfsJSON {
+			// Only bad credentials forbid an LFS request.
+			renderJSON(w, gr.logger, http.StatusForbidden, lfs.ErrorResponse{Message: "bad credentials"})
+		} else {
+			renderForbidden(w, r)
+		}
+	case unauthorized:
+		askCredentials(w, r)
+		renderUnauthorized(w, r)
+	case forbidLFSWrite, unauthorizedLFS:
+		denyLFSWrite(w, r, gr)
+	default:
+		return false
+	}
+	return true
 }
 
 func (s *server) serviceRPC(w http.ResponseWriter, r *http.Request, gr *gitRequest) {

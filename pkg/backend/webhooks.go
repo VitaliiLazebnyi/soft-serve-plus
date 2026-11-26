@@ -21,16 +21,32 @@ import (
 	"github.com/google/uuid"
 )
 
+// WebhookInput is a webhook as CreateWebhook and UpdateWebhook write it:
+// everything but its repository and ID.
+type WebhookInput struct {
+	// URL is where the webhook's requests go.
+	URL string
+	// ContentType is how a request's body is encoded.
+	ContentType webhook.ContentType
+	// Secret signs the requests; empty for none.
+	Secret string
+	// Events are the events the webhook is sent for. A repeated event
+	// counts once.
+	Events []webhook.Event
+	// Active is whether requests are sent at all.
+	Active bool
+}
+
 // CreateWebhook creates a webhook for a repository.
-func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, url string, contentType webhook.ContentType, secret string, events []webhook.Event, active bool) error {
-	url = termtext.Sanitize(url)
-	if err := validateWebhookInput(ctx, d.webhookAllowedHosts(), url, contentType, events); err != nil {
+func (d *Backend) CreateWebhook(ctx context.Context, repo proto.Repository, in WebhookInput) error {
+	url := termtext.Sanitize(in.URL)
+	if err := validateWebhookInput(ctx, d.webhookAllowedHosts(), url, in.ContentType, in.Events); err != nil {
 		return err
 	}
-	events = dedupeEvents(events)
+	events := dedupeEvents(in.Events)
 
 	err := d.db.TransactionContext(ctx, func(tx *db.Tx) error {
-		lastID, err := d.store.CreateWebhook(ctx, tx, models.Webhook{RepoID: repo.ID(), URL: url, Secret: secret, ContentType: int(contentType), Active: active})
+		lastID, err := d.store.CreateWebhook(ctx, tx, models.Webhook{RepoID: repo.ID(), URL: url, Secret: in.Secret, ContentType: int(in.ContentType), Active: in.Active})
 		if err != nil {
 			return err
 		}
@@ -129,19 +145,19 @@ func (d *Backend) ListWebhooks(ctx context.Context, repo proto.Repository) ([]we
 	return hooks, nil
 }
 
-// UpdateWebhook updates a webhook.
-func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id int64, url string, contentType webhook.ContentType, secret string, updatedEvents []webhook.Event, active bool) error {
-	url = termtext.Sanitize(url)
-	if err := validateWebhookInput(ctx, d.webhookAllowedHosts(), url, contentType, updatedEvents); err != nil {
+// UpdateWebhook replaces the webhook id of repo with in.
+func (d *Backend) UpdateWebhook(ctx context.Context, repo proto.Repository, id int64, in WebhookInput) error {
+	url := termtext.Sanitize(in.URL)
+	if err := validateWebhookInput(ctx, d.webhookAllowedHosts(), url, in.ContentType, in.Events); err != nil {
 		return err
 	}
-	updatedEvents = dedupeEvents(updatedEvents)
+	updatedEvents := dedupeEvents(in.Events)
 
 	return d.db.TransactionContext(ctx, func(tx *db.Tx) error {
 		// The webhook must belong to this repository: the update matches no
 		// row otherwise and fails with db.ErrRecordNotFound, before the event
 		// rewrite below can touch another repository's webhook.
-		if err := d.store.UpdateWebhookByID(ctx, tx, models.Webhook{ID: id, RepoID: repo.ID(), URL: url, Secret: secret, ContentType: int(contentType), Active: active}); err != nil {
+		if err := d.store.UpdateWebhookByID(ctx, tx, models.Webhook{ID: id, RepoID: repo.ID(), URL: url, Secret: in.Secret, ContentType: int(in.ContentType), Active: in.Active}); err != nil {
 			return webhookNotFound(err)
 		}
 

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/webhook"
@@ -36,7 +37,7 @@ func TestWebhookDeliveriesAreScopedToRepository(t *testing.T) {
 	victim := proto.UserFromContext(victimCtx)
 	victimRepo, err := be.CreateRepository(victimCtx, "victim-repo", victim, proto.RepositoryOptions{Private: true})
 	is.NoErr(err)
-	is.NoErr(be.CreateWebhook(victimCtx, victimRepo, "http://93.184.216.34/hook", webhook.ContentTypeJSON, "s3cret", []webhook.Event{webhook.EventPush}, true))
+	is.NoErr(be.CreateWebhook(victimCtx, victimRepo, backend.WebhookInput{URL: "http://93.184.216.34/hook", ContentType: webhook.ContentTypeJSON, Secret: "s3cret", Events: []webhook.Event{webhook.EventPush}, Active: true}))
 
 	victimHooks, err := be.ListWebhooks(victimCtx, victimRepo)
 	is.NoErr(err)

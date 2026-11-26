@@ -2,7 +2,8 @@
 // serve), its maintenance commands (soft admin) and a local repository
 // browser (soft browse). Its hook commands (soft hook) are run only by the
 // hook scripts of a repository whose hooks an older server generated, until
-// soft admin sync-hooks replaces them with scripts that call no soft process.
+// soft admin sync-hooks or soft serve --sync-hooks replaces them with scripts
+// that call no soft process.
 package main
 
 import (
@@ -22,7 +23,6 @@ import (
 	"github.com/charmbracelet/soft-serve/cmd/soft/hook"
 	"github.com/charmbracelet/soft-serve/cmd/soft/serve"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/webhook"
 	mcobra "github.com/muesli/mango-cobra"
 	"github.com/muesli/roff"
 	"github.com/spf13/cobra"
@@ -153,8 +153,6 @@ func init() {
 		}
 	}
 	rootCmd.Version = Version
-
-	webhook.Version = Version
 }
 
 func main() {
@@ -197,6 +195,8 @@ func loadServerConfig() (*config.Config, *log.Logger, func() error, error) {
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// Webhook requests name the version in their User-Agent.
+	cfg.Version = Version
 	logger, f, err := newLogger(cfg)
 	if err != nil {
 		// logger still writes to stderr.

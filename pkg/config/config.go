@@ -356,6 +356,12 @@ type Config struct {
 	// DataPath is the path to the directory where Soft Serve will store its data.
 	DataPath string `env:"DATA_PATH" yaml:"-"`
 
+	// Version is the version of the soft binary, which webhook requests
+	// name in their User-Agent. It is not a setting: neither the config
+	// file nor the environment sets it, and Environ leaves it out. The soft
+	// command sets it once it has loaded the config.
+	Version string `yaml:"-"`
+
 	// adminKeys is InitialAdminKeys parsed by Validate. Validate is the
 	// only place the entries are read as keys or key files, so admin
 	// identity does not depend on the data directory's contents after

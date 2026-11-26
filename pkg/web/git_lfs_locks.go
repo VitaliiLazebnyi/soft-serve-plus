@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/charmbracelet/soft-serve/pkg/db"
+	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/store"
@@ -88,12 +89,7 @@ func (s *server) serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request, g
 			// The conflicting lock may be anyone's; the spec returns it.
 			lock, err := datastore.GetLFSLockForPath(ctx, dbx, repo.ID(), req.Path)
 			if err == nil {
-				errResp.Lock = lfs.Lock{
-					ID:       strconv.FormatInt(lock.ID, 10),
-					Path:     lock.Path,
-					LockedAt: lock.CreatedAt,
-				}
-				errResp.Lock.Owner = lfs.Owner{Name: lock.OwnerName}
+				errResp.Lock = lfsLock(lock)
 			}
 			renderJSON(w, gr.logger, http.StatusConflict, errResp)
 			return
@@ -115,6 +111,18 @@ func (s *server) serviceLfsLocksCreate(w http.ResponseWriter, r *http.Request, g
 			},
 		},
 	})
+}
+
+// lfsLock returns lock as the LFS API shows it, owned by its owner.
+func lfsLock(lock models.LFSLock) lfs.Lock {
+	return lfs.Lock{
+		ID:       strconv.FormatInt(lock.ID, 10),
+		Path:     lock.Path,
+		LockedAt: lock.CreatedAt,
+		Owner: lfs.Owner{
+			Name: lock.OwnerName,
+		},
+	}
 }
 
 // locksLimit checks the limit of a lock list or verify request. A negative
@@ -179,8 +187,13 @@ func (s *server) serviceLfsLocksGet(w http.ResponseWriter, r *http.Request, gr *
 	datastore := s.datastore
 	repo := gr.repo
 
-	if id > 0 {
-		lock, err := datastore.GetLFSLockByID(ctx, dbx, repo.ID(), id)
+	if id > 0 || path != "" {
+		var lock models.LFSLock
+		if id > 0 {
+			lock, err = datastore.GetLFSLockByID(ctx, dbx, repo.ID(), id)
+		} else {
+			lock, err = datastore.GetLFSLockForPath(ctx, dbx, repo.ID(), path)
+		}
 		if err != nil {
 			if errors.Is(err, db.ErrRecordNotFound) {
 				// A filter that matches nothing is an empty list.
@@ -195,44 +208,7 @@ func (s *server) serviceLfsLocksGet(w http.ResponseWriter, r *http.Request, gr *
 		}
 
 		renderJSON(w, gr.logger, http.StatusOK, lfs.LockListResponse{
-			Locks: []lfs.Lock{
-				{
-					ID:       strconv.FormatInt(lock.ID, 10),
-					Path:     lock.Path,
-					LockedAt: lock.CreatedAt,
-					Owner: lfs.Owner{
-						Name: lock.OwnerName,
-					},
-				},
-			},
-		})
-		return
-	} else if path != "" {
-		lock, err := datastore.GetLFSLockForPath(ctx, dbx, repo.ID(), path)
-		if err != nil {
-			if errors.Is(err, db.ErrRecordNotFound) {
-				// A filter that matches nothing is an empty list.
-				renderJSON(w, gr.logger, http.StatusOK, lfs.LockListResponse{Locks: []lfs.Lock{}})
-				return
-			}
-			logger.Error("error getting lock", "err", err)
-			renderJSON(w, gr.logger, http.StatusInternalServerError, lfs.ErrorResponse{
-				Message: "internal server error",
-			})
-			return
-		}
-
-		renderJSON(w, gr.logger, http.StatusOK, lfs.LockListResponse{
-			Locks: []lfs.Lock{
-				{
-					ID:       strconv.FormatInt(lock.ID, 10),
-					Path:     lock.Path,
-					LockedAt: lock.CreatedAt,
-					Owner: lfs.Owner{
-						Name: lock.OwnerName,
-					},
-				},
-			},
+			Locks: []lfs.Lock{lfsLock(lock)},
 		})
 		return
 	}
@@ -248,14 +224,7 @@ func (s *server) serviceLfsLocksGet(w http.ResponseWriter, r *http.Request, gr *
 
 	lockList := make([]lfs.Lock, len(locks))
 	for i, lock := range locks {
-		lockList[i] = lfs.Lock{
-			ID:       strconv.FormatInt(lock.ID, 10),
-			Path:     lock.Path,
-			LockedAt: lock.CreatedAt,
-			Owner: lfs.Owner{
-				Name: lock.OwnerName,
-			},
-		}
+		lockList[i] = lfsLock(lock)
 	}
 
 	resp := lfs.LockListResponse{
@@ -324,14 +293,7 @@ func (s *server) serviceLfsLocksVerify(w http.ResponseWriter, r *http.Request, g
 	}
 
 	for _, lock := range locks {
-		l := lfs.Lock{
-			ID:       strconv.FormatInt(lock.ID, 10),
-			Path:     lock.Path,
-			LockedAt: lock.CreatedAt,
-			Owner: lfs.Owner{
-				Name: lock.OwnerName,
-			},
-		}
+		l := lfsLock(lock)
 
 		if user != nil && user.ID() == lock.UserID {
 			ours = append(ours, l)
@@ -420,14 +382,7 @@ func (s *server) serviceLfsLocksDelete(w http.ResponseWriter, r *http.Request, g
 		return
 	}
 
-	l := lfs.Lock{
-		ID:       strconv.FormatInt(lock.ID, 10),
-		Path:     lock.Path,
-		LockedAt: lock.CreatedAt,
-		Owner: lfs.Owner{
-			Name: lock.OwnerName,
-		},
-	}
+	l := lfsLock(lock)
 
 	// Force delete another user's lock (requires admin privileges)
 	if req.Force {

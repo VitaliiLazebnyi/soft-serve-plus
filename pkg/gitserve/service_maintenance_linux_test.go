@@ -35,7 +35,7 @@ const prSetChildSubreaper = 36
 func TestReceivePackMaintenanceDoesNotDetach(t *testing.T) {
 	// Not parallel: the subreaper setting is process-wide, and the
 	// operator case sets the process environment.
-	if v, err := git.BinVersion(); err != nil || v.Less(git.Version{Major: 2, Minor: 47}) {
+	if v, err := git.BinVersion(t.Context()); err != nil || v.Less(git.Version{Major: 2, Minor: 47}) {
 		t.Skipf("git %v (%v) does not detach maintenance on every push", v, err)
 	}
 	if _, _, errno := syscall.RawSyscall(syscall.SYS_PRCTL, prSetChildSubreaper, 1, 0); errno != 0 {

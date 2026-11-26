@@ -916,7 +916,7 @@ func TestCloseStopsDeliveries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Backend.CreateWebhook(ctx, repo, "http://127.0.0.1:1/hook", webhook.ContentTypeJSON, "", []webhook.Event{webhook.EventPush}, true); err != nil {
+	if err := s.Backend.CreateWebhook(ctx, repo, backend.WebhookInput{URL: "http://127.0.0.1:1/hook", ContentType: webhook.ContentTypeJSON, Events: []webhook.Event{webhook.EventPush}, Active: true}); err != nil {
 		t.Fatal(err)
 	}
 

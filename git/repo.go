@@ -39,7 +39,7 @@ type Repository struct {
 	// attrSource reports whether git check-attr supports --source:
 	// attrSourceSupported, which tests replace on their own repository to
 	// exercise the fallback.
-	attrSource func() bool
+	attrSource func(ctx context.Context) bool
 }
 
 // newRepository returns the repository at path, bound to ctx, with the
