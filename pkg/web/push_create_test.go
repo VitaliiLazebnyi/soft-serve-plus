@@ -1,15 +1,18 @@
 package web
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"charm.land/log/v2"
 	"github.com/charmbracelet/soft-serve/pkg/access"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/gorilla/mux"
@@ -611,4 +614,50 @@ func gitOutput(t *testing.T, args ...string) string {
 		t.Fatalf("git %v: %v", args, err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// panicRepo is a repository whose name panics, so a removal of it panics.
+type panicRepo struct{ proto.Repository }
+
+func (panicRepo) Name() string { panic("panicRepo.Name") }
+
+// A panic in a removal its timer runs is recovered and logged; it does not
+// end the process, and the repository still leaves the list.
+func TestHTTPPushCreateTimerRecoversPanic(t *testing.T) {
+	t.Parallel()
+	f := newOracleFixture(t)
+	if got := f.do(http.MethodGet, "/boom.git/info/refs?service=git-receive-pack", "Token "+f.token).Code; got != http.StatusOK {
+		t.Fatalf("advertisement = %v, want %v", got, http.StatusOK)
+	}
+	var logs syncLog
+	f.pending.mu.Lock()
+	f.pending.repos["boom"].repo = panicRepo{f.pending.repos["boom"].repo}
+	f.pending.logger = log.New(&logs)
+	f.pending.mu.Unlock()
+
+	f.fireTimer(t, "boom")
+	f.waitUnlisted(t, "boom")
+	for deadline := time.Now().Add(time.Minute); !strings.Contains(logs.String(), "recovered panic"); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no recovered panic logged a minute after the timer fired: %q", logs.String())
+		}
+	}
+}
+
+// syncLog is a buffer a logger writes to from another goroutine.
+type syncLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncLog) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncLog) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

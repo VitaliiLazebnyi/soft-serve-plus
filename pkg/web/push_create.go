@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/internal/safego"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 )
@@ -168,7 +169,11 @@ func (p *pushCreates) end(name string, pc *pushCreate, failed bool) {
 	if p.closed {
 		return
 	}
-	pc.timer = time.AfterFunc(pushCreateTimeout, func() { p.remove(name, pc, gen) })
+	// The timer's goroutine is the server's own, so nothing else would
+	// recover a panic in the removal.
+	pc.timer = time.AfterFunc(pushCreateTimeout, func() {
+		_ = safego.Run(p.logger, func() { p.remove(name, pc, gen) })
+	})
 }
 
 // remove takes the repository off the list and deletes it if it is still
