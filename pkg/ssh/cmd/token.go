@@ -2,12 +2,13 @@ package cmd
 
 import (
 	"fmt"
+	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2/table"
-	"github.com/caarlos0/duration"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/dustin/go-humanize"
 	"github.com/spf13/cobra"
@@ -38,7 +39,7 @@ func (cmds *Commands) TokenCommand() *cobra.Command {
 
 			var expiresAt time.Time
 			if createExpiresIn != "" {
-				d, err := duration.Parse(createExpiresIn)
+				d, err := parseExpiresIn(createExpiresIn)
 				if err != nil {
 					return err
 				}
@@ -150,4 +151,57 @@ func (cmds *Commands) TokenCommand() *cobra.Command {
 	)
 
 	return cmd
+}
+
+// longUnits are the --expires-in units that time.ParseDuration lacks, in
+// hours: a day is 24 hours, a week 7 days, a month 30 days and a year 365.
+var longUnits = map[string]time.Duration{"d": 24, "w": 7 * 24, "mo": 30 * 24, "y": 365 * 24}
+
+// expiresInPart is one number and unit of an --expires-in value.
+var expiresInPart = regexp.MustCompile(`^([0-9]*(?:\.[0-9]*)?)([^0-9.]*)`)
+
+// parseExpiresIn parses a duration as time.ParseDuration does, with the
+// units d, w, mo and y added, such as "1y", "3mo" or "5d4h".
+func parseExpiresIn(s string) (time.Duration, error) {
+	rest, neg := s, false
+	if rest != "" && (rest[0] == '-' || rest[0] == '+') {
+		neg, rest = rest[0] == '-', rest[1:]
+	}
+	if rest == "" {
+		return 0, fmt.Errorf("invalid duration %q", s)
+	}
+	var total time.Duration
+	for rest != "" {
+		m := expiresInPart.FindStringSubmatch(rest)
+		num, unit := m[1], m[2]
+		if num == "" || num == "." {
+			return 0, fmt.Errorf("invalid duration %q", s)
+		}
+		rest = rest[len(m[0]):]
+		var d time.Duration
+		var err error
+		if hours, ok := longUnits[unit]; ok {
+			d, err = time.ParseDuration(num + "h")
+			if err == nil && d > math.MaxInt64/hours {
+				err = fmt.Errorf("invalid duration %q", s)
+			}
+			d *= hours
+		} else {
+			if unit == "" && num == "0" && rest == "" && total == 0 {
+				return 0, nil
+			}
+			d, err = time.ParseDuration(num + unit)
+		}
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q: units are ns, us, ms, s, m, h, d, w, mo and y", s)
+		}
+		if total > math.MaxInt64-d {
+			return 0, fmt.Errorf("invalid duration %q", s)
+		}
+		total += d
+	}
+	if neg {
+		total = -total
+	}
+	return total, nil
 }
