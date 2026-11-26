@@ -131,6 +131,9 @@ func TestSchedulerShutdownWaitsForRunningJob(t *testing.T) {
 		t.Fatal("the job did not run")
 	}
 
+	// The job blocks on release, which is closed only after this Shutdown
+	// has returned: however late the deadline fires, the job is still
+	// running then, and nothing else must finish inside it.
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond) // meant to run out while the job runs
 	defer cancel()
 	if err := s.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {

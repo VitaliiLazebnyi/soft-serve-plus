@@ -1104,3 +1104,33 @@ func TestSecureClientTestDialSkipsRefusedAddresses(t *testing.T) {
 		t.Errorf("body %q, want the in-memory server's", body)
 	}
 }
+
+// While internal/testdial gets a Func in the middle of a dial, one attempt
+// can connect, having been checked before the Func was set, and another be
+// redirected after: the hand-off then returns the Func's connection, and
+// closes the one the dial made instead of leaking it.
+func TestToTestDialerClosesDialedConnection(t *testing.T) {
+	// Not parallel: it sets internal/testdial, which is package state.
+	redirected, redirectedPeer := net.Pipe()
+	dialed, dialedPeer := net.Pipe()
+	t.Cleanup(func() {
+		for _, c := range []net.Conn{redirected, redirectedPeer, dialed, dialedPeer} {
+			_ = c.Close()
+		}
+	})
+	t.Cleanup(testdial.Set(func(context.Context, string, string) (net.Conn, error) {
+		return redirected, nil
+	}))
+
+	c, handed, err := toTestDialer(t.Context(), &dialTarget{network: "tcp", address: "127.0.0.1:80"}, dialed)
+	if !handed || err != nil {
+		t.Fatalf("toTestDialer = handed %v, error %v; want the test dialer's connection", handed, err)
+	}
+	if c != redirected {
+		t.Fatal("toTestDialer returned the dialed connection, not the test dialer's")
+	}
+	// A pipe refuses a deadline once it is closed, and only then.
+	if err := dialed.SetDeadline(time.Time{}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("the dialed connection is still open: SetDeadline = %v, want %v", err, io.ErrClosedPipe)
+	}
+}

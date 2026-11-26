@@ -105,6 +105,10 @@ type testHooks struct {
 	// test can have a refusal come after a deadline without waiting
 	// for it to pass.
 	now func() time.Time
+	// requestTimed, if set, runs after an accepted request's duration is
+	// observed, with its service. requestSeconds is shared by every daemon
+	// in the process, so it lets a test count one daemon's observations.
+	requestTimed func(service gitserve.Service)
 }
 
 // now returns the time refuse counts its wait from.
@@ -567,6 +571,9 @@ func (d *Server) serve(ctx context.Context, c *serverConn, req gitRequest) {
 	defer func() {
 		elapsed := time.Since(start)
 		requestSeconds.WithLabelValues(service.String()).Observe(elapsed.Seconds())
+		if d.testHooks.requestTimed != nil {
+			d.testHooks.requestTimed(service)
+		}
 		d.logger.Debug("git: finished request", "remote", c.RemoteAddr(), "service", service, "repo", name, "duration", elapsed)
 	}()
 

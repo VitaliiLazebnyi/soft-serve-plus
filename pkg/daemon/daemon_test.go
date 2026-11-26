@@ -1808,7 +1808,7 @@ func (b *syncBuffer) String() string {
 
 // newRequestTestDaemon serves a daemon that logs at Info level to the
 // returned buffer, on its own loopback listener.
-func newRequestTestDaemon(t *testing.T) (*Server, *syncBuffer) {
+func newRequestTestDaemon(t *testing.T, hooks testHooks) (*Server, *syncBuffer) {
 	t.Helper()
 	logs := &syncBuffer{}
 	logger := log.New(logs)
@@ -1818,6 +1818,7 @@ func newRequestTestDaemon(t *testing.T) (*Server, *syncBuffer) {
 		t.Fatal(err)
 	}
 	patient(d)
+	d.testHooks = hooks
 	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -1903,7 +1904,14 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 	if _, err := testBackend.CreateRepository(context.Background(), "accepted-public", fixtureAdmin(t, testBackend), proto.RepositoryOptions{}); err != nil && !errors.Is(err, proto.ErrRepoExist) {
 		t.Fatalf("failed to create repo: %v", err)
 	}
-	d, logs := newRequestTestDaemon(t)
+	var timed atomic.Int32
+	d, logs := newRequestTestDaemon(t, testHooks{requestTimed: func(service gitserve.Service) {
+		if service == gitserve.UploadPackService {
+			timed.Add(1)
+		} else {
+			t.Errorf("timed a %s request; this test sends only upload-pack", service)
+		}
+	}})
 
 	before := sampleCount(t, gitserve.UploadPackService)
 	if got := request(t, d, gitserve.UploadPackService, "accepted-missing"); got != gitserve.ErrNotAuthed.Error() {
@@ -1917,8 +1925,15 @@ func TestAcceptedRequestLoggedAndTimed(t *testing.T) {
 	// it lets go of its connection, which it does after the client hangs
 	// up: once it holds no connection, it is done with both requests.
 	waitConns(t, d, 0, idleWait)
-	// Other tests' requests may finish meanwhile, so only check that this
-	// one was counted.
+	// This daemon timed the accepted request once, and the refused one not
+	// at all.
+	if got := timed.Load(); got != 1 {
+		t.Errorf("upload-pack requests this daemon timed = %d, want 1", got)
+	}
+	// The observation went to the histogram the metrics endpoint serves.
+	// Other tests' daemons observe into it too: Close does not wait for
+	// their requests to end, so one may finish meanwhile, and the global
+	// count can only be bounded from below.
 	if got := sampleCount(t, gitserve.UploadPackService) - before; got < 1 {
 		t.Errorf("request duration observations = %d, want at least 1", got)
 	}

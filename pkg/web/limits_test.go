@@ -42,6 +42,12 @@ func newLimitsServer(t *testing.T, configure func(*config.HTTPConfig)) string {
 // loaded machine that stalls the server for seconds does not fail the test,
 // and the test does not time the cut-off: a connection still open after
 // closeWait is one the timeout did not apply to.
+//
+// The one-second idle and max timeouts these tests set are not budgets the
+// client must beat: nothing the client does has to finish inside them. A
+// client whose request is late is cut off all the same, which is what each
+// test checks, and its one write still succeeds on a connection the server
+// has already closed.
 const closeWait = time.Minute
 
 // dial opens a connection to addr that fails the test if it is still open

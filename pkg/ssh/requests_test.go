@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,15 +20,24 @@ import (
 
 // allStacks returns the stacks of every goroutine.
 func allStacks() string {
-	buf := make([]byte, 1<<20)
+	stacksMu.Lock()
+	defer stacksMu.Unlock()
 	for {
-		n := runtime.Stack(buf, true)
-		if n < len(buf) {
-			return string(buf[:n])
+		n := runtime.Stack(stacksBuf, true)
+		if n < len(stacksBuf) {
+			return string(stacksBuf[:n])
 		}
-		buf = make([]byte, 2*len(buf))
+		stacksBuf = make([]byte, 2*len(stacksBuf))
 	}
 }
+
+// stacksBuf is the buffer allStacks reuses, so that a test polling the
+// stacks does not allocate a fresh megabyte each time; stacksMu guards it,
+// as parallel tests poll at once.
+var (
+	stacksMu  sync.Mutex
+	stacksBuf = make([]byte, 1<<20)
+)
 
 // goroutineBlocked reports whether one goroutine waits in state, as its
 // stack header names it (such as "[sync.Cond.Wait"), with every one of

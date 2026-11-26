@@ -504,6 +504,10 @@ func TestSqliteWriterWaitEndsWithContext(t *testing.T) {
 		t.Fatalf("writer: %v", err)
 	}
 
+	// The writer holds its turn until release is closed, which happens only
+	// after this transaction has returned: however late the deadline fires,
+	// the waiting writer cannot get the turn first, and nothing else must
+	// finish inside it.
 	wctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond) // meant to run out while the writer holds its turn
 	defer cancel()
 	called := false
