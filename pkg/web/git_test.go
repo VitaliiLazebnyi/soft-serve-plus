@@ -1246,6 +1246,7 @@ func newServiceRPCServer(t *testing.T) (srv *httptest.Server, flushes <-chan *fl
 		h.endErr = r.Context().Err()
 		rc <- h
 	}))
+	testnet.UseDial(srv.Client())
 	t.Cleanup(srv.Close)
 	return srv, fc, rc
 }
@@ -1265,7 +1266,7 @@ func post(ctx context.Context, srv *httptest.Server, body io.Reader, gzipped boo
 	if gzipped {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
-	resp, err := testnet.Client(srv.Client()).Do(req)
+	resp, err := srv.Client().Do(req)
 	if err != nil {
 		return false, err
 	}

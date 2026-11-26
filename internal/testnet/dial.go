@@ -83,16 +83,11 @@ func UseDialForDefaultTransport() {
 	http.DefaultTransport.(*http.Transport).DialContext = Dial
 }
 
-// Client returns a copy of c whose transport, an *http.Transport such as
-// an httptest.Server's, connects with Dial.
-func Client(c *http.Client) *http.Client {
-	cc := *c
-	t := http.DefaultTransport.(*http.Transport)
-	if ct, ok := c.Transport.(*http.Transport); ok {
-		t = ct
-	}
-	t = t.Clone()
-	t.DialContext = Dial
-	cc.Transport = t
-	return &cc
+// UseDial makes c's transport, an *http.Transport such as an
+// httptest.Server's, connect with Dial, and returns c. Call it before c
+// sends anything: the transport is changed in place, so c keeps reusing
+// its connections.
+func UseDial(c *http.Client) *http.Client {
+	c.Transport.(*http.Transport).DialContext = Dial
+	return c
 }

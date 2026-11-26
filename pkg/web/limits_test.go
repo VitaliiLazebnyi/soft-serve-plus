@@ -398,7 +398,7 @@ func TestRequestLimitsIdleIgnoresWorkBetweenReadsAndWrites(t *testing.T) {
 			}
 			t.Cleanup(srv.Close)
 
-			resp, err := testnet.Client(srv.Client()).Do(newSentRequest(t, srv.URL, reqBody))
+			resp, err := testnet.UseDial(srv.Client()).Do(newSentRequest(t, srv.URL, reqBody))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -454,7 +454,7 @@ func TestRequestLimitsIdleStalledReaderHTTP2(t *testing.T) {
 	srv.EnableHTTP2 = true
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
-	client := testnet.Client(srv.Client())
+	client := testnet.UseDial(srv.Client())
 	client.Transport.(*http.Transport).DialContext = n.Dial
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
@@ -542,7 +542,7 @@ func TestRequestLimitsReadAfterHandlerHTTP2(t *testing.T) {
 	srv.Config.HTTP2 = &http.HTTP2Config{MaxConcurrentStreams: 1}
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
-	client := testnet.Client(srv.Client())
+	client := testnet.UseDial(srv.Client())
 	// The second request waits for the first stream to close instead of
 	// opening a connection of its own.
 	client.Transport.(*http.Transport).HTTP2 = &http.HTTP2Config{StrictMaxConcurrentRequests: true}

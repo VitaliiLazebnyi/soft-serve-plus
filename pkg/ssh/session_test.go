@@ -77,7 +77,7 @@ func (w *firstWrite) Write(p []byte) (int, error) {
 
 func setup(tb testing.TB) *gossh.Session {
 	tb.Helper()
-	return testsession.New(tb, setupServer(tb), nil)
+	return newTestSession(tb, setupServer(tb), nil)
 }
 
 // setupServer returns an SSH server running the TUI middleware. Its database
@@ -432,7 +432,7 @@ func TestNewSessionProgramContextEndsWithProgram(t *testing.T) {
 	if err := ssh.EmulatePty()(srv); err != nil {
 		t.Fatal(err)
 	}
-	sess := testsession.New(t, srv, &gossh.ClientConfig{User: "test"})
+	sess := newTestSession(t, srv, &gossh.ClientConfig{User: "test"})
 	if err := sess.RequestPty("xterm", 40, 80, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +469,7 @@ func TestNewSessionProgramClampsSize(t *testing.T) {
 	if err := ssh.EmulatePty()(srv); err != nil {
 		t.Fatal(err)
 	}
-	sess := testsession.New(t, srv, &gossh.ClientConfig{User: "test"})
+	sess := newTestSession(t, srv, &gossh.ClientConfig{User: "test"})
 	if err := sess.RequestPty("xterm", 30000, 30000, nil); err != nil {
 		t.Fatal(err)
 	}

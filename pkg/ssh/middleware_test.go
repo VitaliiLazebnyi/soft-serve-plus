@@ -312,7 +312,7 @@ func TestAuthenticationAfterOfferedKey(t *testing.T) {
 			mu.Lock()
 			approved = nil
 			mu.Unlock()
-			sess, err := testsession.NewClientSession(t, addr, &gossh.ClientConfig{
+			sess, err := newClientSession(t, addr, &gossh.ClientConfig{
 				User: "test",
 				Auth: []gossh.AuthMethod{gossh.PublicKeys(offeredKey{pub: tc.offered.PublicKey()}, tc.signer)},
 			})
@@ -383,7 +383,7 @@ func TestSessionAccessCheckFailure(t *testing.T) {
 		{"unregistered key, TUI", gossh.PublicKeys(signer), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sess, err := testsession.NewClientSession(t, addr, &gossh.ClientConfig{
+			sess, err := newClientSession(t, addr, &gossh.ClientConfig{
 				User: "test",
 				Auth: []gossh.AuthMethod{tc.auth},
 			})
@@ -457,7 +457,7 @@ func TestLoggingMiddlewarePtyKeepsFields(t *testing.T) {
 	var buf syncBuffer
 	logger := log.NewWithOptions(&buf, log.Options{Level: log.DebugLevel})
 
-	sess := testsession.New(t, &ssh.Server{
+	sess := newTestSession(t, &ssh.Server{
 		Handler: func(s ssh.Session) {
 			s.Context().SetValue(proto.ContextKeyUser, proto.User(logTestUser{}))
 			(&Server{logger: logger}).loggingMiddleware(func(s ssh.Session) {
@@ -574,7 +574,7 @@ func TestPublicKeyCounterSkipsKeylessSession(t *testing.T) {
 	}
 
 	allowed, refused := publicKeyCounts()
-	sess := testsession.New(t, srv, &gossh.ClientConfig{
+	sess := newTestSession(t, srv, &gossh.ClientConfig{
 		User: "anon",
 		Auth: []gossh.AuthMethod{gossh.KeyboardInteractive(func(string, string, []string, []bool) ([]string, error) {
 			return nil, nil
@@ -793,7 +793,7 @@ func TestCommandLengthMiddleware(t *testing.T) {
 			t.Parallel()
 
 			var reached atomic.Bool
-			sess := testsession.New(t, &ssh.Server{
+			sess := newTestSession(t, &ssh.Server{
 				Handler: commandLengthMiddleware(func(s ssh.Session) {
 					reached.Store(true)
 					s.Exit(0) //nolint: errcheck
@@ -877,7 +877,7 @@ func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 
 	run := func(signer gossh.Signer) (string, string, error) {
 		t.Helper()
-		sess, err := testsession.NewClientSession(t, addr, &gossh.ClientConfig{
+		sess, err := newClientSession(t, addr, &gossh.ClientConfig{
 			User: "test",
 			Auth: []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		})

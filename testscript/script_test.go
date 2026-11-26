@@ -1093,13 +1093,12 @@ func cmdEnsureServerNotRunning(ts *testscript.TestScript, neg bool, args []strin
 	port := ts.Getenv(args[0])
 
 	// verify that the server is not up. Only a refused connection says that
-	// nothing listens: a dial that times out on a loaded machine does not.
+	// nothing listens: a dial that times out on a loaded machine does not,
+	// and testnet.Dial tries such a dial again.
 	addr := net.JoinHostPort(loopback, port)
-	conn, err := net.DialTimeout( //nolint:noctx
-		"tcp",
-		addr,
-		time.Minute,
-	)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	conn, err := testnet.Dial(ctx, "tcp", addr)
 	if err == nil {
 		_ = conn.Close()
 		ts.Fatalf("server is running on port %s while it should not be running", port)
