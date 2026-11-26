@@ -9,6 +9,12 @@ import (
 	"github.com/google/uuid"
 )
 
+// The queries compare a webhook ID with CAST(? AS BIGINT), not with ?. The
+// SSH webhook commands take the ID from the user, and webhooks.id is a
+// 32-bit SERIAL on Postgres, which types a bare parameter after the column
+// and refuses a value past 2^31-1 as out of range. As BIGINT it compares
+// like any other number, so such an ID names no webhook, as on SQLite.
+
 // CreateWebhook implements store.Store.
 func (*Store) CreateWebhook(ctx context.Context, h db.Handler, w models.Webhook) (int64, error) {
 	var id int64
@@ -51,7 +57,7 @@ func (*Store) CreateWebhookEvents(ctx context.Context, h db.Handler, webhookID i
 
 // DeleteWebhookForRepoByID implements store.Store.
 func (*Store) DeleteWebhookForRepoByID(ctx context.Context, h db.Handler, repoID int64, id int64) error {
-	query := h.Rebind(`DELETE FROM webhooks WHERE repo_id = ? AND id = ?;`)
+	query := h.Rebind(`DELETE FROM webhooks WHERE repo_id = ? AND id = CAST(? AS BIGINT);`)
 	return affected(h.ExecContext(ctx, query, repoID, id))
 }
 
@@ -74,10 +80,10 @@ func (*Store) PruneWebhookDeliveries(ctx context.Context, h db.Handler, webhookI
 
 // pruneWebhookDeliveriesQuery takes the webhook ID twice and then keep.
 const pruneWebhookDeliveriesQuery = `DELETE FROM webhook_deliveries
-	WHERE webhook_id = ?
+	WHERE webhook_id = CAST(? AS BIGINT)
 	AND seq <= (
 		SELECT seq FROM webhook_deliveries
-		WHERE webhook_id = ?
+		WHERE webhook_id = CAST(? AS BIGINT)
 		ORDER BY seq DESC
 		LIMIT 1 OFFSET ?
 	);`
@@ -97,14 +103,14 @@ func (*Store) DeleteWebhookEventsByID(ctx context.Context, h db.Handler, webhook
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	query := h.Rebind(`DELETE FROM webhook_events WHERE webhook_id = ? AND id IN (` + placeholders(len(ids)) + `);`)
+	query := h.Rebind(`DELETE FROM webhook_events WHERE webhook_id = CAST(? AS BIGINT) AND id IN (` + bigintPlaceholders(len(ids)) + `);`)
 	_, err := h.ExecContext(ctx, query, args...)
 	return err
 }
 
 // GetWebhookByID implements store.Store.
 func (*Store) GetWebhookByID(ctx context.Context, h db.Handler, repoID int64, id int64) (models.Webhook, error) {
-	query := h.Rebind(`SELECT * FROM webhooks WHERE repo_id = ? AND id = ?;`)
+	query := h.Rebind(`SELECT * FROM webhooks WHERE repo_id = ? AND id = CAST(? AS BIGINT);`)
 	var wh models.Webhook
 	err := h.GetContext(ctx, &wh, query, repoID, id)
 	return wh, err
@@ -118,7 +124,7 @@ const maxListedWebhookDeliveries = 100
 
 // GetWebhookDeliveryByID implements store.Store.
 func (*Store) GetWebhookDeliveryByID(ctx context.Context, h db.Handler, webhookID int64, id uuid.UUID) (models.WebhookDelivery, error) {
-	query := h.Rebind(`SELECT * FROM webhook_deliveries WHERE webhook_id = ? AND id = ?;`)
+	query := h.Rebind(`SELECT * FROM webhook_deliveries WHERE webhook_id = CAST(? AS BIGINT) AND id = ?;`)
 	var whd models.WebhookDelivery
 	err := h.GetContext(ctx, &whd, query, webhookID, id)
 	return whd, err
@@ -126,7 +132,7 @@ func (*Store) GetWebhookDeliveryByID(ctx context.Context, h db.Handler, webhookI
 
 // GetWebhookEventsByWebhookID implements store.Store.
 func (*Store) GetWebhookEventsByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookEvent, error) {
-	query := h.Rebind(`SELECT * FROM webhook_events WHERE webhook_id = ? ORDER BY id;`)
+	query := h.Rebind(`SELECT * FROM webhook_events WHERE webhook_id = CAST(? AS BIGINT) ORDER BY id;`)
 	var whes []models.WebhookEvent
 	err := h.SelectContext(ctx, &whes, query, webhookID)
 	return whes, err
@@ -197,7 +203,7 @@ func (*Store) GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, 
 	query := h.Rebind(`SELECT webhooks.*
 			FROM webhooks
 			INNER JOIN webhook_events ON webhooks.id = webhook_events.webhook_id
-			WHERE webhooks.repo_id = ? AND webhooks.id = ? AND webhooks.active = ? AND webhook_events.event = ?;`)
+			WHERE webhooks.repo_id = ? AND webhooks.id = CAST(? AS BIGINT) AND webhooks.active = ? AND webhook_events.event = ?;`)
 	var wh models.Webhook
 	err := h.GetContext(ctx, &wh, query, repoID, id, true, event)
 	return wh, err
@@ -208,7 +214,7 @@ func (*Store) GetActiveWebhookByIDWhereEvent(ctx context.Context, h db.Handler, 
 // limited to the most recent maxListedWebhookDeliveries.
 func (*Store) ListWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler, webhookID int64) ([]models.WebhookDelivery, error) {
 	query := h.Rebind(`SELECT * FROM (
-		SELECT id, response_status, event, created_at, seq FROM webhook_deliveries WHERE webhook_id = ? ORDER BY seq DESC LIMIT ?
+		SELECT id, response_status, event, created_at, seq FROM webhook_deliveries WHERE webhook_id = CAST(? AS BIGINT) ORDER BY seq DESC LIMIT ?
 	) AS d ORDER BY seq;`)
 	var whds []models.WebhookDelivery
 	err := h.SelectContext(ctx, &whds, query, webhookID, maxListedWebhookDeliveries)
@@ -217,8 +223,14 @@ func (*Store) ListWebhookDeliveriesByWebhookID(ctx context.Context, h db.Handler
 
 // UpdateWebhookByID implements store.Store.
 func (*Store) UpdateWebhookByID(ctx context.Context, h db.Handler, w models.Webhook) error {
-	query := h.Rebind(`UPDATE webhooks SET url = ?, secret = ?, content_type = ?, active = ?, updated_at = CURRENT_TIMESTAMP WHERE repo_id = ? AND id = ?;`)
+	query := h.Rebind(`UPDATE webhooks SET url = ?, secret = ?, content_type = ?, active = ?, updated_at = CURRENT_TIMESTAMP WHERE repo_id = ? AND id = CAST(? AS BIGINT);`)
 	return affected(h.ExecContext(ctx, query, w.URL, w.Secret, w.ContentType, w.Active, w.RepoID, w.ID))
+}
+
+// bigintPlaceholders is placeholders with each one cast to BIGINT, for IDs
+// compared with a SERIAL column (see the note at the top).
+func bigintPlaceholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("CAST(? AS BIGINT),", n), ",")
 }
 
 // placeholders returns n comma-separated "?" placeholders for an IN clause.
