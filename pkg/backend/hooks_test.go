@@ -283,8 +283,9 @@ func TestAfterPushSurvivesSubscriberLookupFailure(t *testing.T) {
 	e := newWebhookEnv(t)
 	e.seedHook(t, webhook.EventPush)
 	commit := makeCommit(t, e.be.repoPath("repo"))
-	_, err := e.be.db.ExecContext(e.ctx, "DROP TABLE webhooks")
-	is.NoErr(err)
+	// Postgres refuses to drop a table other tables' foreign keys name
+	// unless they go too.
+	execAll(t, e.ctx, e.be.db, byDriver(e.be.db, []string{"DROP TABLE webhooks"}, []string{"DROP TABLE webhooks CASCADE"}))
 
 	e.afterPush(t, e.admin, []hooks.HookArg{{OldSha: zeroSha, NewSha: commit, RefName: "refs/heads/main"}})
 

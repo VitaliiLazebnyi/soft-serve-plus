@@ -1,19 +1,15 @@
 package sshlfs
 
 import (
-	"context"
 	"errors"
 	"io"
 	"testing"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 )
 
 // lockTestUser is a proto.User with just an ID.
@@ -29,19 +25,8 @@ func (u lockTestUser) ID() int64 { return u.id }
 // not as a conflict with an existing lock.
 func TestLFSLockOnDeletedRepository(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	dp := t.TempDir()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	dbx, err := db.Open(ctx, "sqlite", dp+"/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", db.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
-	st := database.New(nil)
+	e := backendtest.New(t)
+	ctx, cfg, dbx, st := e.Ctx, e.Cfg, e.DB, e.Store
 
 	admin, err := st.FindUserByUsername(ctx, dbx, "admin")
 	if err != nil {

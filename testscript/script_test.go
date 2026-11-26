@@ -29,7 +29,6 @@ import (
 	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/internal/testnet"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
 	"github.com/rogpeppe/go-internal/testscript"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
@@ -1236,83 +1235,19 @@ func connRefused(err error) bool {
 	return errno == syscall.ECONNREFUSED || runtime.GOOS == "windows" && errno == wsaeconnrefused
 }
 
+// setupPostgres points cfg at a disposable database on the Postgres server
+// cfg's data source names, and returns the function that drops it. Scripts
+// run in parallel; dbtest.CreateDatabase never hands two of them the same
+// database.
 func setupPostgres(t testscript.T, cfg *config.Config) (func(), error) {
-	// Indicates postgres
-	// Create a disposable database
-	dbDsn := cfg.DB.DataSource
-	if dbDsn == "" {
-		cfg.DB.DataSource = "postgres://postgres@localhost:5432/postgres?sslmode=disable"
-	}
-
-	dbURL, err := url.Parse(cfg.DB.DataSource)
+	dsn, drop, err := dbtest.CreateDatabase(context.TODO(), cfg.DB.DataSource)
 	if err != nil {
 		return nil, err
 	}
-
-	scheme := dbURL.Scheme
-	if scheme == "" {
-		scheme = "postgres"
-	}
-
-	host := dbURL.Hostname()
-	if host == "" {
-		host = "localhost"
-	}
-
-	connInfo := fmt.Sprintf("host=%s sslmode=disable", host)
-	username := dbURL.User.Username()
-	if username != "" {
-		connInfo += fmt.Sprintf(" user=%s", username)
-		password, ok := dbURL.User.Password()
-		if ok {
-			username = fmt.Sprintf("%s:%s", username, password)
-			connInfo += fmt.Sprintf(" password=%s", password)
-		}
-		username = fmt.Sprintf("%s@", username)
-	} else {
-		connInfo += " user=postgres"
-		username = "postgres@"
-	}
-
-	port := dbURL.Port()
-	if port != "" {
-		connInfo += fmt.Sprintf(" port=%s", port)
-		port = fmt.Sprintf(":%s", port)
-	}
-
-	// Create the database. Scripts run in parallel, so its name comes from
-	// dbtest.CreateDB, which never hands two of them the same one.
-	dbx, err := db.Open(context.TODO(), cfg.DB.Driver, connInfo, db.Options{})
-	if err != nil {
-		return nil, err
-	}
-
-	defer dbx.Close() //nolint:errcheck
-	dbName, err := dbtest.CreateDB(context.TODO(), dbx, "softserve_test")
-	if err != nil {
-		return nil, err
-	}
-
-	cfg.DB.DataSource = fmt.Sprintf("%s://%s%s%s/%s?sslmode=disable",
-		scheme,
-		username,
-		host,
-		port,
-		dbName,
-	)
-
+	cfg.DB.DataSource = dsn
 	return func() {
-		dbx, err := db.Open(context.TODO(), cfg.DB.Driver, connInfo, db.Options{})
-		if err != nil {
-			t.Fatal("failed to open database", dbName, err)
-		}
-		defer dbx.Close() //nolint:errcheck
-
-		// FORCE ends connections the script's server may still hold;
-		// without it the drop fails with "database is being accessed by
-		// other users" whenever the server has not fully exited yet.
-		if _, err := dbx.ExecContext(context.TODO(), "DROP DATABASE "+dbName+" WITH (FORCE)"); err != nil {
-			t.Fatal("failed to drop database", dbName, err)
+		if err := drop(); err != nil {
+			t.Fatal("failed to drop database", dsn, err)
 		}
 	}, nil
 }

@@ -8,38 +8,23 @@ import (
 	"testing"
 
 	charmlog "charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/internal/dbtest"
 	"github.com/charmbracelet/soft-serve/pkg/access"
-	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/matryer/is"
 )
 
-// newLookupBackend is newTestBackendWithLog on the test database dbtest
-// opens: Postgres when SOFT_SERVE_DB_DRIVER is "postgres", SQLite otherwise.
-// The lookup tests break its tables.
+// newLookupBackend is newTestBackendWithLog logging at Debug level. The
+// lookup tests break its tables.
 func newLookupBackend(t *testing.T, logs io.Writer) *Backend {
 	t.Helper()
-	ctx := context.Background()
-	dbx, err := dbtest.Open(ctx, t)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	cfg.DB.Driver = dbx.DriverName()
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
 	var logger *charmlog.Logger
 	if logs != nil {
 		logger = charmlog.New(logs)
 		logger.SetLevel(charmlog.DebugLevel)
 	}
-	return New(cfg, dbx, database.New(nil), logger)
+	be, _ := openTestBackend(t, logger, "")
+	return be
 }
 
 // During an outage a missing name gets the same answer as an existing

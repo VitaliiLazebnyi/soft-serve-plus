@@ -7,14 +7,10 @@ import (
 	"testing"
 
 	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/internal/dbtest"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 )
 
 // newLookupTestDaemon returns a daemon with its own database, which the
@@ -23,25 +19,11 @@ import (
 // written to the returned buffer at Debug level.
 func newLookupTestDaemon(t *testing.T) (context.Context, *Server, *db.DB, *syncBuffer) {
 	t.Helper()
-	ctx := context.Background()
-	dbx, err := dbtest.Open(ctx, t)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	cfg.DB.Driver = dbx.DriverName()
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
 	logs := &syncBuffer{}
 	logger := log.New(logs)
 	logger.SetLevel(log.DebugLevel)
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
-	st := database.New(nil)
-	be := backend.New(cfg, dbx, st, logger)
+	e := backendtest.New(t, backendtest.WithLogger(logger))
+	ctx, cfg, dbx, be := e.Ctx, e.Cfg, e.DB, e.Backend
 	if _, err := be.CreateRepository(ctx, "public", fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 		t.Fatal(err)
 	}

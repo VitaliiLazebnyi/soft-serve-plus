@@ -21,14 +21,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/internal/testnet"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/gitserve"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	_ "modernc.org/sqlite" // sqlite driver
@@ -65,19 +63,12 @@ func runTests(m *testing.M) int {
 	// serves its own daemon (startIdleDaemon).
 	cfg.Git.IdleTimeout = 600
 	cfg.Git.ListenAddr = fmt.Sprintf("127.0.0.1:%d", testnet.RandomPort()) // RandomPort checks only loopback
-	if err := cfg.Validate(); err != nil {
-		log.Fatal(err)
-	}
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
+	e, remove, err := backendtest.NewUnmanaged(tmp, backendtest.UseConfig(cfg))
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer dbx.Close() //nolint:errcheck
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		log.Fatal(err)
-	}
-	datastore := database.New(nil)
-	be := backend.New(cfg, dbx, datastore, nil)
+	defer remove() //nolint:errcheck
+	be := e.Backend
 	testBackend = be
 	d, err := NewServer(cfg, be, nil)
 	if err != nil {

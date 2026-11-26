@@ -736,21 +736,53 @@ func TestUpdateWebhookFailsOnDuplicateURL(t *testing.T) {
 	is.Equal(gotA.URL, whURL)
 }
 
-// execTrigger makes writes to table fail with a database error. Triggers live
-// only in the per-test database.
+// execTrigger makes writes to table fail with a database error (see
+// refuseTrigger).
 func (e whEnv) execTrigger(t *testing.T, name, timing, op, table string) {
 	t.Helper()
-	is := is.New(t)
-	_, err := e.be.db.ExecContext(e.ctx,
-		"CREATE TRIGGER "+name+" "+timing+" "+op+" ON "+table+" BEGIN SELECT RAISE(ABORT, 'forced failure'); END;")
-	is.NoErr(err)
+	refuseTrigger(t, e.ctx, e.be.db, name, timing, op, table)
 }
 
+// dropTrigger removes the trigger execTrigger created as name.
 func (e whEnv) dropTrigger(t *testing.T, name string) {
 	t.Helper()
-	is := is.New(t)
-	_, err := e.be.db.ExecContext(e.ctx, "DROP TRIGGER "+name)
-	is.NoErr(err)
+	execAll(t, e.ctx, e.be.db, byDriver(e.be.db,
+		[]string{"DROP TRIGGER " + name},
+		[]string{"DROP FUNCTION " + name + "() CASCADE"}))
+}
+
+// refuseTrigger creates the trigger name, which makes each row write of kind
+// op (such as "INSERT", "DELETE" or "UPDATE OF name") on table fail with a
+// database error, at timing "BEFORE" or "AFTER". On Postgres the trigger
+// runs a function of the same name. Triggers live only in the per-test
+// database.
+func refuseTrigger(t *testing.T, ctx context.Context, dbx *db.DB, name, timing, op, table string) {
+	t.Helper()
+	execAll(t, ctx, dbx, byDriver(dbx,
+		[]string{"CREATE TRIGGER " + name + " " + timing + " " + op + " ON " + table +
+			" BEGIN SELECT RAISE(ABORT, 'forced failure'); END;"},
+		[]string{
+			"CREATE FUNCTION " + name + "() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced failure'; END $$;",
+			"CREATE TRIGGER " + name + " " + timing + " " + op + " ON " + table + " FOR EACH ROW EXECUTE FUNCTION " + name + "();",
+		}))
+}
+
+// byDriver returns sqlite or postgres, whichever is for dbx's driver.
+func byDriver[T any](dbx *db.DB, sqlite, postgres T) T {
+	if dbx.DriverName() == "postgres" {
+		return postgres
+	}
+	return sqlite
+}
+
+// execAll runs each statement on dbx, failing the test at the first error.
+func execAll(t *testing.T, ctx context.Context, dbx *db.DB, stmts []string) {
+	t.Helper()
+	for _, q := range stmts {
+		if _, err := dbx.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
 }
 
 // A failure while removing an event must roll back the whole update, so the

@@ -3,19 +3,16 @@ package sshlfs
 import (
 	"context"
 	"io"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/git-lfs-transfer/transfer"
-	"github.com/charmbracelet/soft-serve/pkg/config"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/db/models"
 	"github.com/charmbracelet/soft-serve/pkg/lfs"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 )
 
 // lfsIDRepo and lfsIDUser carry the ID of a row in the test database.
@@ -40,19 +37,8 @@ func (u lfsIDUser) ID() int64 { return u.id }
 // (busy_timeout) and then failing with "database is locked".
 func TestLFSLockLookupsDoNotWaitForWriter(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	dp := t.TempDir()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	dbx, err := db.Open(ctx, "sqlite", filepath.Join(dp, "test.db")+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", db.Options{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	s := database.New(nil)
+	e := backendtest.New(t)
+	ctx, dbx, s := e.Ctx, e.DB, e.Store
 
 	var repoID, userID int64
 	if err := dbx.TransactionContext(ctx, func(tx *db.Tx) error {

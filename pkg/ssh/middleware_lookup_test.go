@@ -2,7 +2,6 @@ package ssh
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -11,12 +10,8 @@ import (
 	"charm.land/ssh"
 	"charm.land/wish/v2/testsession"
 	"github.com/charmbracelet/keygen"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	gossh "golang.org/x/crypto/ssh"
 	_ "modernc.org/sqlite"
 )
@@ -28,23 +23,9 @@ import (
 func TestAuthenticationMiddlewareUserLookup(t *testing.T) {
 	t.Parallel()
 
-	dp := t.TempDir()
-	ctx := context.Background()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	cfg.DB.Driver = "sqlite"
-	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = dbx.Close() })
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
-	dbstore := database.New(nil)
-	be := backend.New(cfg, dbx, dbstore, log.Default())
+	e := backendtest.New(t, backendtest.WithLogger(log.Default()))
+	ctx, cfg, dbx, dbstore, be := e.Ctx, e.Cfg, e.DB, e.Store, e.Backend
+	dp := cfg.DataPath
 
 	newKey := func(name string) gossh.Signer {
 		t.Helper()

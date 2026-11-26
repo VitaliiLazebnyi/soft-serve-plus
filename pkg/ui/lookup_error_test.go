@@ -1,17 +1,11 @@
 package ui
 
 import (
-	"context"
 	"errors"
 	"testing"
 
-	"charm.land/log/v2"
-	"github.com/charmbracelet/soft-serve/internal/dbtest"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
-	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 )
 
@@ -21,22 +15,8 @@ import (
 func TestOpenRepoOutageSameAnswer(t *testing.T) {
 	for _, table := range []string{"repos", "settings"} {
 		t.Run(table, func(t *testing.T) {
-			ctx := context.Background()
-			dbx, err := dbtest.Open(ctx, t)
-			if err != nil {
-				t.Fatal(err)
-			}
-			cfg := config.DefaultConfig()
-			cfg.DataPath = t.TempDir()
-			cfg.DB.Driver = dbx.DriverName()
-			if err := cfg.Validate(); err != nil {
-				t.Fatal(err)
-			}
-			if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-				t.Fatal(err)
-			}
-			st := database.New(nil)
-			be := backend.New(cfg, dbx, st, log.Default())
+			e := backendtest.New(t)
+			ctx, dbx, be := e.Ctx, e.DB, e.Backend
 			owner, err := be.CreateUser(ctx, "owner", proto.UserOptions{})
 			if err != nil {
 				t.Fatal(err)

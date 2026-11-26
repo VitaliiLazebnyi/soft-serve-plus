@@ -427,6 +427,9 @@ func waitingForWriteTurn() bool {
 func TestSendWebhookRecordWaitsForWriteTurn(t *testing.T) {
 	is := is.New(t)
 	e := newTestEnv(t)
+	if e.dbx.DriverName() != "sqlite" {
+		t.Skip("only SQLite databases have a write turn")
+	}
 	e.useHTTPClient(t)
 	srv, _ := newReceiver(t, http.StatusOK, "")
 	w := e.newWebhook(t, srv.URL, "", ContentTypeJSON, EventBranchTagCreate)
@@ -920,7 +923,7 @@ func (s countingPruneStore) PruneWebhookDeliveries(ctx context.Context, h db.Han
 func TestRecordDeliveryWebhookDeletedMidSend(t *testing.T) {
 	t.Parallel()
 	is := is.New(t)
-	e := newTestEnvOnEitherDriver(t)
+	e := newTestEnv(t)
 	w := e.newWebhook(t, "https://93.184.216.34/a", "", ContentTypeJSON, EventPush)
 
 	triggers := []string{fmt.Sprintf(`CREATE TRIGGER vanish BEFORE INSERT ON webhook_deliveries

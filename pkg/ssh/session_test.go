@@ -18,11 +18,8 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2/testsession"
-	"github.com/charmbracelet/soft-serve/pkg/backend"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/config"
-	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/ui"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/matryer/is"
@@ -87,23 +84,9 @@ func setupServer(tb testing.TB) *ssh.Server {
 // setupServerWith is setupServer with tui as the TUI middleware.
 func setupServerWith(tb testing.TB, tui func(*Server) func(ssh.Handler) ssh.Handler) *ssh.Server {
 	tb.Helper()
-	ctx := context.TODO()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = tb.TempDir()
-	if err := cfg.Validate(); err != nil {
-		tb.Fatal(err)
-	}
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	if err != nil {
-		tb.Fatal(err)
-	}
-	closeTestDB(tb, dbx)
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		tb.Fatal(err)
-	}
-	dbstore := database.New(nil)
-	be := backend.New(cfg, dbx, dbstore, log.Default())
-	hs := handlerServer(tb, cfg, dbx, dbstore, be, log.Default())
+	e := backendtest.New(tb, backendtest.WithLogger(log.Default()))
+	closeTestDB(tb, e.DB)
+	hs := handlerServer(tb, e.Cfg, e.DB, e.Store, e.Backend, log.Default())
 	return &ssh.Server{
 		Handler: tui(hs)(func(s ssh.Session) {
 			_, _, active := s.Pty()

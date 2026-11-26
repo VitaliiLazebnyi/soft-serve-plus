@@ -16,14 +16,13 @@ import (
 
 	"charm.land/log/v2"
 	"github.com/charmbracelet/keygen"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/jwk"
 	"github.com/charmbracelet/soft-serve/pkg/ssh/cmd"
 	"github.com/charmbracelet/soft-serve/pkg/store"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -175,40 +174,29 @@ func depsOf(ctx context.Context) *testDeps {
 	return ctx.Value(testDepsKey{}).(*testDeps)
 }
 
-// serverContext validates cfg and returns a context with what NewServer
-// needs: the config, logger, host key and token signer, and a migrated
-// database, store and backend. The host key is the one at cfg.SSH.KeyPath,
-// which it creates if there is none, as the server does at start.
+// serverContext returns a context with what NewServer needs: cfg, on the
+// test database and validated (see backendtest.UseConfig), the logger, the
+// host key and token signer, and a migrated database, store and backend. The
+// host key is the one at cfg.SSH.KeyPath, which it creates if there is none,
+// as the server does at start.
 //
 // The caller sets cfg.DataPath to a t.TempDir before calling it, and starts
 // the server after: closeTestDB, which closes the database, then runs after
 // the server is closed and before the directory is removed.
 func serverContext(t *testing.T, cfg *config.Config, logger *log.Logger) context.Context {
 	t.Helper()
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	closeTestDB(t, dbx)
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
-	dbstore := database.New(nil)
-	be := backend.New(cfg, dbx, dbstore, logger)
+	e := backendtest.New(t, backendtest.UseConfig(cfg), backendtest.WithLogger(logger))
+	closeTestDB(t, e.DB)
 	hostKey := testHostKey(t, cfg.SSH.KeyPath)
 	tokens, err := jwk.NewSigner(hostKey, cfg.HTTP.PublicURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return context.WithValue(ctx, testDepsKey{}, &testDeps{
+	return context.WithValue(e.Ctx, testDepsKey{}, &testDeps{
 		cfg:     cfg,
-		dbx:     dbx,
-		st:      dbstore,
-		be:      be,
+		dbx:     e.DB,
+		st:      e.Store,
+		be:      e.Backend,
 		hostKey: hostKey,
 		tokens:  tokens,
 		logger:  logger,

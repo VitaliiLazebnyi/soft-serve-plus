@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/soft-serve/git"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
@@ -22,11 +23,8 @@ import (
 func newRepoTestUI(t *testing.T) *Model {
 	t.Helper()
 	ctx := t.Context()
-	cfg := newTestUIConfig(t)
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	be := newTestUIBackend(t, cfg)
+	e := backendtest.New(t)
+	cfg, be := e.Cfg, e.Backend
 	for _, name := range []string{"a", "b"} {
 		if _, err := be.CreateRepository(ctx, name, fixtureAdmin(t, be), proto.RepositoryOptions{}); err != nil {
 			t.Fatal(err)

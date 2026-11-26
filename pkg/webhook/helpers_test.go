@@ -57,42 +57,26 @@ func (s *Sender) sendWebhook(ctx context.Context, w models.Webhook, event Event,
 // testVersion is the server version of newTestEnv's Sender.
 const testVersion = "1.2.3-test"
 
-// newTestEnv builds a test environment. The owner user and a repository named
-// "repo" owned by that user are created.
+// newTestEnv builds a test environment on the test database dbtest opens:
+// Postgres when SOFT_SERVE_DB_DRIVER is "postgres", SQLite otherwise. The
+// owner user and a repository named "repo" owned by that user are created.
+//
+// The packages that build a backend use internal/backendtest, which this
+// package's tests cannot import.
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	is := is.New(t)
 
-	dp := t.TempDir()
+	dbx, dataSource, err := dbtest.OpenSource(context.Background(), t)
+	is.NoErr(err)
 	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	cfg.DB.Driver = "sqlite"
-	cfg.DB.DataSource = filepath.Join(dp, "test.db") + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	cfg.DataPath = t.TempDir()
+	cfg.DB.Driver = dbx.DriverName()
+	cfg.DB.DataSource = dataSource
 	cfg.HTTP.PublicURL = "http://127.0.0.1:23232"
 	cfg.SSH.PublicURL = "ssh://127.0.0.1:23231"
 	cfg.Git.PublicURL = "git://127.0.0.1:9418"
 	cfg.Version = testVersion
-
-	ctx := context.Background()
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	is.NoErr(err)
-	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
-	return newTestEnvOn(t, cfg, dbx)
-}
-
-// newTestEnvOnEitherDriver is newTestEnv on a database from dbtest.Open:
-// Postgres when SOFT_SERVE_DB_DRIVER is "postgres", SQLite otherwise.
-func newTestEnvOnEitherDriver(t *testing.T) *testEnv {
-	t.Helper()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = t.TempDir()
-	cfg.HTTP.PublicURL = "http://127.0.0.1:23232"
-	cfg.SSH.PublicURL = "ssh://127.0.0.1:23231"
-	cfg.Git.PublicURL = "git://127.0.0.1:9418"
-	dbx, err := dbtest.Open(context.Background(), t)
-	if err != nil {
-		t.Fatal(err)
-	}
 	return newTestEnvOn(t, cfg, dbx)
 }
 

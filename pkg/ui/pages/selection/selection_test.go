@@ -9,45 +9,29 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/log/v2"
+	"github.com/charmbracelet/soft-serve/internal/backendtest"
 	"github.com/charmbracelet/soft-serve/pkg/backend"
 	"github.com/charmbracelet/soft-serve/pkg/config"
 	"github.com/charmbracelet/soft-serve/pkg/db"
-	"github.com/charmbracelet/soft-serve/pkg/db/migrate"
 	"github.com/charmbracelet/soft-serve/pkg/proto"
-	"github.com/charmbracelet/soft-serve/pkg/store/database"
 	"github.com/charmbracelet/soft-serve/pkg/ui/common"
 	"github.com/charmbracelet/soft-serve/pkg/ui/components/selector"
 	"github.com/charmbracelet/soft-serve/pkg/ui/uitest"
 	_ "modernc.org/sqlite" // sqlite driver
 )
 
-// testServer is a migrated SQLite backend, its config and database.
+// testServer is a backendtest.Env's config, database and backend.
 type testServer struct {
 	cfg *config.Config
 	db  *db.DB
 	be  *backend.Backend
 }
 
-// newTestBackend returns a migrated SQLite backend.
+// newTestBackend returns a backendtest.Env as a testServer.
 func newTestBackend(t *testing.T) *testServer {
 	t.Helper()
-	ctx := t.Context()
-	dp := t.TempDir()
-	cfg := config.DefaultConfig()
-	cfg.DataPath = dp
-	cfg.DB.Driver = "sqlite"
-	cfg.DB.DataSource = dp + "/test.db?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	dbx, err := db.Open(ctx, cfg.DB.Driver, cfg.DB.DataSource, db.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = dbx.Close() })
-	if err := migrate.Migrate(ctx, dbx, cfg, nil); err != nil {
-		t.Fatal(err)
-	}
-	be := backend.New(cfg, dbx, database.New(nil), log.Default())
-	return &testServer{cfg: cfg, db: dbx, be: be}
+	e := backendtest.New(t)
+	return &testServer{cfg: e.Cfg, db: e.DB, be: e.Backend}
 }
 
 // common returns the Common of a session on the server whose context is

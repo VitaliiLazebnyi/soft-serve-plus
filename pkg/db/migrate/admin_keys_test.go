@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,49 +23,13 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// openDB opens an empty test database: postgres when SOFT_SERVE_DB_DRIVER is
-// "postgres" (a disposable database next to SOFT_SERVE_DB_DATA_SOURCE, as the
-// coverage job's Postgres step sets), sqlite otherwise.
+// openDB opens an empty test database (see dbtest.Open).
 func openDB(t *testing.T, ctx context.Context) *db.DB {
 	t.Helper()
-	if os.Getenv("SOFT_SERVE_DB_DRIVER") != "postgres" {
-		dbx, err := dbtest.OpenSqlite(ctx, t)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return dbx
-	}
-
-	dsn := os.Getenv("SOFT_SERVE_DB_DATA_SOURCE")
-	if dsn == "" {
-		dsn = "postgres://postgres@localhost:5432/postgres?sslmode=disable"
-	}
-	admin, err := db.Open(ctx, "postgres", dsn, db.Options{})
+	dbx, err := dbtest.Open(ctx, t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	name, err := dbtest.CreateDB(ctx, admin, "softserve_migrate_test")
-	if err != nil {
-		admin.Close() //nolint:errcheck
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if _, err := admin.ExecContext(context.TODO(), "DROP DATABASE "+name+" WITH (FORCE)"); err != nil {
-			t.Error(err)
-		}
-		admin.Close() //nolint:errcheck
-	})
-
-	u, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	u.Path = "/" + name
-	dbx, err := db.Open(ctx, "postgres", u.String(), db.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { dbx.Close() }) //nolint:errcheck
 	return dbx
 }
 
