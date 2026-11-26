@@ -629,7 +629,7 @@ func TestHTTPPushCreateTimerRecoversPanic(t *testing.T) {
 	if got := f.do(http.MethodGet, "/boom.git/info/refs?service=git-receive-pack", "Token "+f.token).Code; got != http.StatusOK {
 		t.Fatalf("advertisement = %v, want %v", got, http.StatusOK)
 	}
-	var logs syncLog
+	var logs syncBuffer
 	f.pending.mu.Lock()
 	f.pending.repos["boom"].repo = panicRepo{f.pending.repos["boom"].repo}
 	f.pending.logger = log.New(&logs)
@@ -644,19 +644,20 @@ func TestHTTPPushCreateTimerRecoversPanic(t *testing.T) {
 	}
 }
 
-// syncLog is a buffer a logger writes to from another goroutine.
-type syncLog struct {
+// syncBuffer is a log sink that a timer goroutine writes to while the test
+// may be reading it, as in the other packages' tests.
+type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
-func (b *syncLog) Write(p []byte) (int, error) {
+func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.Write(p)
 }
 
-func (b *syncLog) String() string {
+func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
