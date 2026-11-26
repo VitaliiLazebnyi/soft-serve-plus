@@ -546,7 +546,10 @@ log after editing `config.yaml`.
 
 You can also use environment variables, to override these settings. All server
 settings environment variables start with `SOFT_SERVE_` followed by the setting
-name all in uppercase. Here are some examples:
+name all in uppercase. A variable set to the empty string leaves a single
+setting as the file set it, but clears a list setting (such as
+`SOFT_SERVE_SSH_CLIENT_ALLOWED_HOSTS=`); `SOFT_SERVE_INITIAL_ADMIN_KEYS` is
+merged with the file's keys instead. Here are some examples:
 
 - `SOFT_SERVE_NAME`: The name of the server that will appear in the TUI
 - `SOFT_SERVE_SSH_LISTEN_ADDR`: SSH listen address
