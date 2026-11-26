@@ -386,7 +386,7 @@ func TestUserVisibleListsAreOrdered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	collabs, err := cs.ListCollabsByRepo(ctx, dbx, "repo7")
+	collabs, err := cs.ListCollabsByRepoID(ctx, dbx, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestUserVisibleListsAreOrdered(t *testing.T) {
 			t.Fatal("not true: collabs[i-1].ID < collabs[i].ID")
 		}
 	}
-	collabUsers, err := cs.ListCollabsByRepoAsUsers(ctx, dbx, "repo7")
+	collabUsers, err := cs.ListCollabsByRepoIDAsUsers(ctx, dbx, 7)
 	if err != nil {
 		t.Fatal(err)
 	}

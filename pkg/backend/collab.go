@@ -97,13 +97,15 @@ func (d *Backend) ResolvedCollaborators(ctx context.Context, r proto.Repository)
 }
 
 // collaborators is Collaborators, which with id other than 0 lists them
-// only while repo is the repository with ID id.
+// only while repo is the repository with ID id. The collaborators are read
+// by the ID the lookup found, so a rename and a create committed after the
+// lookup cannot put another repository's collaborators in the list.
 func (d *Backend) collaborators(ctx context.Context, repo string, id int64) ([]Collaborator, error) {
 	repo = proto.SanitizeRepo(repo)
 	var users []models.User
 	var collabs []models.Collab
 	if err := d.db.ReadTransactionContext(ctx, func(tx *db.Tx) error {
-		// The join returns an empty list for a missing repository, so
+		// An ID read returns an empty list for a missing repository, so
 		// look it up first.
 		m, err := d.store.GetRepoByName(ctx, tx, repo)
 		if err != nil {
@@ -113,12 +115,12 @@ func (d *Backend) collaborators(ctx context.Context, repo string, id int64) ([]C
 			return proto.ErrRepoNotFound
 		}
 
-		users, err = d.store.ListCollabsByRepoAsUsers(ctx, tx, repo)
+		users, err = d.store.ListCollabsByRepoIDAsUsers(ctx, tx, m.ID)
 		if err != nil {
 			return err
 		}
 
-		collabs, err = d.store.ListCollabsByRepo(ctx, tx, repo)
+		collabs, err = d.store.ListCollabsByRepoID(ctx, tx, m.ID)
 		return err
 	}); err != nil {
 		return nil, wrapRepoError(err)

@@ -34,16 +34,16 @@ func TestCollabStore(t *testing.T) {
 		t.Errorf("AddCollabByUsernameAndRepo(again) error = %v, want ErrDuplicateKey", err)
 	}
 
-	cs, err := s.ListCollabsByRepo(ctx, dbx, "repo7")
+	cs, err := s.ListCollabsByRepoID(ctx, dbx, 7)
 	if err != nil || len(cs) != 1 {
-		t.Errorf("ListCollabsByRepo(repo7) = %d, %v, want 1", len(cs), err)
+		t.Errorf("ListCollabsByRepoID(7) = %d, %v, want 1", len(cs), err)
 	}
-	us, err := s.ListCollabsByRepoAsUsers(ctx, dbx, "repo7")
+	us, err := s.ListCollabsByRepoIDAsUsers(ctx, dbx, 7)
 	if err != nil || len(us) != 1 || us[0].Username != "dev" {
-		t.Errorf("ListCollabsByRepoAsUsers(repo7) = %+v, %v, want [dev]", us, err)
+		t.Errorf("ListCollabsByRepoIDAsUsers(7) = %+v, %v, want [dev]", us, err)
 	}
-	if cs, err := s.ListCollabsByRepo(ctx, dbx, "repo8"); err != nil || len(cs) != 0 {
-		t.Errorf("ListCollabsByRepo(repo8) = %d, %v, want 0", len(cs), err)
+	if cs, err := s.ListCollabsByRepoID(ctx, dbx, 8); err != nil || len(cs) != 0 {
+		t.Errorf("ListCollabsByRepoID(8) = %d, %v, want 0", len(cs), err)
 	}
 
 	if err := s.RemoveCollabByUsernameAndRepo(ctx, dbx, "dev", "repo7"); err != nil {

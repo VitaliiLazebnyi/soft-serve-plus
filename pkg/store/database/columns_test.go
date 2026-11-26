@@ -124,8 +124,8 @@ func TestReadsIgnoreColumnsTheModelLacks(t *testing.T) {
 	check("AddCollabByUsernameAndRepo", s.AddCollabByUsernameAndRepo(ctx, dbx, "owner", "repo8", access.ReadOnlyAccess))
 	for name, fn := range map[string]func() error{
 		"GetCollabByUsernameAndRepo": func() error { _, err := s.GetCollabByUsernameAndRepo(ctx, dbx, "owner", "repo8"); return err },
-		"ListCollabsByRepo":          func() error { _, err := s.ListCollabsByRepo(ctx, dbx, "repo8"); return err },
-		"ListCollabsByRepoAsUsers":   func() error { _, err := s.ListCollabsByRepoAsUsers(ctx, dbx, "repo8"); return err },
+		"ListCollabsByRepoID":        func() error { _, err := s.ListCollabsByRepoID(ctx, dbx, 8); return err },
+		"ListCollabsByRepoIDAsUsers": func() error { _, err := s.ListCollabsByRepoIDAsUsers(ctx, dbx, 8); return err },
 		"GetCollabByUserIDAndRepoID": func() error { _, err := s.GetCollabByUserIDAndRepoID(ctx, dbx, owner, 8); return err },
 		"ListCollabsByUserID":        func() error { _, err := s.ListCollabsByUserID(ctx, dbx, owner); return err },
 	} {
